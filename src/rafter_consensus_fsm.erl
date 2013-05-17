@@ -16,7 +16,7 @@
 -export([leader/2, follower/2, candidate/2]).
 
 -record(state, {
-    leader :: string(),
+    leader :: term(),
     term = 0 :: non_neg_integer(),
     voted_for :: term(),
     last_log_term :: non_neg_integer(),
@@ -50,7 +50,7 @@ init([]) ->
     random:seed(),
     Me = rafter_config:get_id(),
     Peers = rafter_config:get_peers(),
-    State = #state{peers=Peers, me=Me, timer_created=os:timestamp()},
+    State = #state{peers=Peers, me=Me, timer_start=os:timestamp()},
     {ok, follower, State, election_timeout()}.
 
 %%=============================================================================
@@ -58,20 +58,60 @@ init([]) ->
 %%=============================================================================
 
 follower(timeout, State) ->
-    {ok, candidate, State, election_timeout()};
+    NewState = State#state{timer_start = os:timestamp()},
+    {ok, candidate, NewState, election_timeout()};
 follower(#request_vote{from=CandidateId}=RequestVote, State) ->
-    NewState = set_term(RequestVote#request_vote.term, State),
-    {ok, Vote} = vote(RequestVote, NewState),
-    %% rafter_log:write(NewState),
+    State2 = set_term(RequestVote#request_vote.term, State),
+    State3 = State#state{voted_for=undefined},
+    {ok, Vote} = vote(RequestVote, State3),
+    %% TODO:  rafter_log:write(NewState),
     transfer:send(CandidateId, Vote);
     case Vote#vote.success of
         true ->
-            {ok, follower, NewState, election_timeout()};
+            State4 = State3#state{voted_for=CandidateId, 
+                                  timer_start=os:timestamp()},
+            {ok, follower, State4, election_timeout()};
         false ->
-            {ok, follower, NewState, election_timeout(State#state.timer_start)}
+            {ok, follower, State3, election_timeout(State#state.timer_start)}
     end;
-follower(#append_entries{}=AppendEntries, State) ->
-    {ok, follower, State, election_timeout()}.
+
+follower(#append_entries{term=Term, from=From, msg_id=MsgId}, 
+         #state{term=CurrentTerm, me=Me}=State) when CurrentTerm > Term ->
+    Rpy = #append_entries_rpy{msg_id=MsgId, 
+                              term=CurrentTerm, 
+                              from=Me, 
+                              success=false},
+    transfer:send(From, Rpy),
+    {ok, follower, State, election_timeout(State#state.timer_start)};
+follower(#append_entries{term=Term, from=From, msg_id=MsgId}=AppendEntries,
+         #state{term=CurrentTerm, me=Me}=State) ->
+    State2=set_term(AppendEntries#append_entries.term, State),
+    State3=State2#state{timer_start=os:timestamp()},
+    Rpy = #append_entries_rpy{msg_id=MsgId,
+                              term=Term,
+                              from=Me,
+                              success=false},
+    case consistency_check(AppendEntries) of
+        false ->
+            transfer:send(From, Rpy),
+            {ok, follower, State3, election_timeout()};
+        true ->
+            ok = rafter_log:truncate(AppendEntries#append_entries.prev_log_index),
+            ok = rafter_log:append(AppendEntries#append_entries.entries),
+%%            apply_committed_entries(AppendEntries, State3),
+            transfer:send(From, Rpy#append_entries_rpy{success=true}),
+            {ok, follower, State3, election_timeout()}
+    end.
+
+consistency_check(#append_entries{prev_log_index=Index, prev_log_term=Term}) ->
+    case rafter_log:get_entry(Index) of
+        not_found ->
+            false;
+        {entry, Term, _Command} ->
+            true;
+        {entry, _DifferentTerm, _Command} ->
+            false
+    end.
 
 candidate(timeout, #state{term=CurrentTerm}=State) ->
     NewState = State#state{term = CurrentTerm + 1,
@@ -124,7 +164,7 @@ leader(#append_entries_rpy{from=From, success=true}, #state{responses=Responses}
 set_term(Term, #state{term=CurrentTerm}=State) when Term < CurrentTerm ->
     State;
 set_term(Term, #state{term=CurrentTerm}=State) when Term > CurrentTerm ->
-    State#state{term=Term, voted_for=undefined};
+    State#state{term=Term};
 set_term(Term, #state{term=Term}=State) ->
     State.
 
@@ -143,12 +183,34 @@ vote(#request_vote{from=CandidateId, term=CurrentTerm}=RequestVote,
     fail_vote(RequestVote, CurrentTerm, Me).
 
 maybe_successful_vote(RequestVote, CurrentTerm, Me, State) ->
-    case check_log(RequestVote, State) of
+    case candidate_log_up_to_date(RequestVote) of
         true ->
             successful_vote(RequestVote, CurrentTerm, Me);
         false ->
             fail_vote(RequestVote, CurrentTerm, Me)
     end.
+
+candidate_log_up_to_date(#request_vote{last_log_term=CandidateTerm,
+                                       last_log_index=CandidateIndex}) ->
+    candidate_log_up_to_date(CandidateTerm, 
+                             CandidateIndex, 
+                             rafter_log:term(), 
+                             rafter_log:index()).
+            
+candidate_log_up_to_date(CandidateTerm, _CandidateIndex, LogTerm, _LogIndex)
+    when CandidateTerm > LogTerm ->
+        true;
+candidate_log_up_to_date(CandidateTerm, _CandidateIndex, LogTerm, _LogIndex)
+    when CandidateTerm < LogTerm ->
+        false;
+candidate_log_up_to_date(Term, CandidateIndex, Term, LogIndex)
+    when CandidateIndex > LogIndex ->
+        true;
+candidate_log_up_to_date(Term, CandidateIndex, Term, LogIndex)
+    when CandidateIndex < LogIndex ->
+        false;
+candidate_log_up_to_date(Term, Index, Term, Index) ->
+    true.
 
 successful_vote(#request_vote{msg_id=MsgId}, CurrentTerm, Me) ->
     {ok, #vote{msg_id=MsgId, term=CurrentTerm, from=Me, success=true}.
@@ -156,22 +218,9 @@ successful_vote(#request_vote{msg_id=MsgId}, CurrentTerm, Me) ->
 fail_vote(#request_vote{msg_id=MsgId}, CurrentTerm, Me) ->
     {ok, #vote{msg_id=MsgId, term=CurrentTerm, from=Me, success=false}.
 
-check_log(#request_vote{last_log_term=CandidateLogTerm},
-          #state{last_log_term=LogTerm}) when CandidateLogTerm > LogTerm ->
-    true;
-check_log(#request_vote{last_log_term=CandidateLogTerm},
-          #state{last_log_term=LogTerm}) when CandidateLogTerm < LogTerm ->
-    false;
-check_log(#request_vote{last_log_index=CandidateLogIndex}, #state{last_log_index=LogIndex})
-          when CandidateLogIndex > LogIndex->
-    true;
-check_log(#request_vote{last_log_index=LogIndex}, #state{last_log_index=LogIndex})
-    true;
-check_log(_RequestVote, _State) ->
-    false;
 
 initialize_followers(State) ->
-    NextIndex = log:get_index() + 1,
+    NextIndex = rafter_log:last_index() + 1,
     Followers = [{Peer, NextIndex} || Peer <- Peers],
     dict:from_list(Followers).
 
