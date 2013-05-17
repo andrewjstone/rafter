@@ -3,6 +3,7 @@
 -behaviour(gen_fsm).
 
 -include("rafter.hrl").
+-include("rafter_consensus_fsm.hrl").
 
 -define(ELECTION_TIMEOUT_MIN, 150).
 -define(ELECTION_TIMEOUT_MAX, 300).
@@ -18,29 +19,8 @@
 %%-export([leader/2, follower/2, candidate/2]).
 -export([follower/2]).
 
--record(state, {
-    leader :: term(),
-    term = 0 :: non_neg_integer(),
-    voted_for :: term(),
-    last_log_term :: non_neg_integer(),
-    last_log_index :: non_neg_integer(),
-
-    %% The last time a timer was created
-    timer_start:: non_neg_integer(),
-
-    %% leader state
-    followers = dict:new() :: dict(),
-
-    %% Responses from RPCs to other servers
-    responses = dict:new() :: dict(),
-
-    %% All servers making up the ensemble
-    me :: string(),
-    peers :: list(string()),
-
-    %% Different Transports can be plugged in (erlang messaging, tcp, udp, etc...)
-    %% To get this thing implemented quickly, erlang messaging is hardcoded for now
-    transport = erlang :: erlang}).
+%% Testing outputs
+-export([set_term/2]).
 
 start_link() ->
     gen_fsm:start_link(?MODULE, [], []).
@@ -252,6 +232,7 @@ election_timeout() ->
 %%=============================================================================
 %% Tests 
 %%=============================================================================
+
 -ifdef(TEST).
 
 -include_lib("eunit/include/eunit.hrl").
