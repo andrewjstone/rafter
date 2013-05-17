@@ -1,0 +1,5 @@
+ebin
+.eunit
+*.beam
+*.swp
+

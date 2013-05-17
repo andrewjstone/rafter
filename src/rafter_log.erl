@@ -40,17 +40,17 @@ init([]) ->
     {ok, #state{}}.
 
 handle_call({append, NewEntries}, _From, #state{entries=Entries}=State) ->
-    {reply, ok, State#state{entries=NewEntries++OldEntries}};
-handle_call(get_last_entry, _From, #state{entries=[H | T]}=State) ->
+    {reply, ok, State#state{entries=NewEntries++Entries}};
+handle_call(get_last_entry, _From, #state{entries=[H | _T]}=State) ->
     {reply, {ok, H}, State};
 handle_call({get_entry, Index}, _From, #state{entries=Entries}=State) ->
     Entry = try 
-        lists:nth(Index, lists:reverse(Entries)),
+        lists:nth(Index, lists:reverse(Entries))
     catch _:_ ->
         not_found
     end, 
     {reply, Entry, State};
-handle_call({truncate, Index}, _From, #state{entries=Entries}) ->
+handle_call({truncate, Index}, _From, #state{entries=Entries}=State) ->
     NewEntries = lists:reverse(lists:sublist(lists:reverse(Entries), Index)),
     {reply, {ok, NewEntries}, State}.
 

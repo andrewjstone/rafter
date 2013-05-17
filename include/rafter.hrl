@@ -4,7 +4,7 @@
             term :: non_neg_integer(),
             from :: term(),
             last_log_index :: non_neg_integer(),
-            last_log_term :: non_neg_term()}).
+            last_log_term :: non_neg_integer()}).
 
 -record(vote, {
             msg_id :: binary(), %% Same Id a request_vote
@@ -17,7 +17,7 @@
             term :: non_neg_integer(),
             from :: term(),
             prev_log_index :: non_neg_integer(),
-            prev_log_term :: non_neg_term(),
+            prev_log_term :: non_neg_integer(),
             entries :: term(),
             commitIndex :: non_neg_integer()}).
 
