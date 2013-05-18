@@ -1,4 +1,4 @@
--module(rafter_consensus_fsm_follower_eqc).
+-module(rafter_consensus_fsm_eqc).
 
 -ifdef(EQC).
 
@@ -13,7 +13,8 @@
 -compile(export_all).
 
 %% eqc properties
--export([prop_monotonic_term/0]).
+-export([prop_monotonic_term/0,
+         prop_candidate_up_to_date/0]).
 
 -define(QC_OUT(P),
     eqc:on_output(fun(Str, Args) ->
@@ -29,8 +30,9 @@ eqc_test_() ->
        fun cleanup/1,
        [%% Run the quickcheck tests
         {timeout, 300,
-            ?_assertEqual(true, 
-                quickcheck(numtests(100, ?QC_OUT(prop_monotonic_term()))))}
+            ?_assertEqual({true, true}, {
+                quickcheck(numtests(50, ?QC_OUT(prop_monotonic_term()))),
+                quickcheck(numtests(50, ?QC_OUT(prop_candidate_up_to_date())))})}
        ]
       }
      ]
@@ -86,9 +88,31 @@ request_vote() ->
 %% ====================================================================
 %% EQC Properties
 %% ====================================================================
+prop_candidate_up_to_date() ->
+    ?FORALL({CandidateTerm, CandidateIndex, LogTerm, LogIndex},
+            {non_neg_integer(), non_neg_integer(),
+             non_neg_integer(), non_neg_integer()},
+         begin
+             Res = rafter_consensus_fsm:candidate_log_up_to_date(CandidateTerm,
+                                                                 CandidateIndex,
+                                                                 LogTerm,
+                                                                 LogIndex),
+             case Res of
+                 true ->
+                     CandidateTerm > LogTerm orelse
+                     (CandidateTerm =:= LogTerm andalso
+                      CandidateIndex >= LogIndex);
+                 false ->
+                     CandidateTerm < LogTerm orelse
+                     (CandidateTerm =:= LogTerm andalso
+                      CandidateIndex =< LogIndex)
+
+             end
+         end).
+
 prop_monotonic_term() ->
     ?FORALL({Term, CurrentTerm},
-            {eqc_gen:int(), eqc_gen:int()},
+            {non_neg_integer(), non_neg_integer()},
             begin
                 State = #state{term=CurrentTerm},
                 case rafter_consensus_fsm:set_term(Term, State) of

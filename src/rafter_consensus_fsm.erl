@@ -20,7 +20,7 @@
 -export([follower/2]).
 
 %% Testing outputs
--export([set_term/2]).
+-export([set_term/2, candidate_log_up_to_date/4]).
 
 start_link() ->
     gen_fsm:start_link(?MODULE, [], []).
