@@ -6,6 +6,7 @@
 -include_lib("eqc/include/eqc_fsm.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-include("rafter.hrl").
 -include("rafter_consensus_fsm.hrl").
 
 %% Public API
@@ -14,7 +15,6 @@
 %% eqc properties
 -export([prop_monotonic_term/0]).
 
--define(ITERATIONS, 500).
 -define(QC_OUT(P),
     eqc:on_output(fun(Str, Args) ->
                 io:format(user, Str, Args) end, P)).
@@ -30,7 +30,7 @@ eqc_test_() ->
        [%% Run the quickcheck tests
         {timeout, 300,
             ?_assertEqual(true, 
-                quickcheck(numtests(?ITERATIONS, ?QC_OUT(prop_monotonic_term()))))}
+                quickcheck(numtests(100, ?QC_OUT(prop_monotonic_term()))))}
        ]
       }
      ]
@@ -45,6 +45,43 @@ cleanup(_) ->
 %% ====================================================================
 %% EQC Generators 
 %% ====================================================================
+me() ->
+    peer1.
+
+peers() ->
+    [peer2, peer3, peer4, peer5].
+
+peer() ->
+    oneof(peers()).
+
+%% Generate a lower 7-bit ACSII character that should not cause any problems
+%% with utf8 conversion.
+lower_char() ->
+    choose(16#20, 16#7f).
+
+not_empty(G) ->
+    ?SUCHTHAT(X, G, X /= [] andalso X /= <<>>).
+
+non_blank_string() ->
+    ?LET(X, not_empty(list(lower_char())), list_to_binary(X)).
+
+non_neg_integer() -> 
+    ?LET(X, int(), abs(X)).
+
+consistent_terms() ->
+    ?SUCHTHAT({CurrentTerm, LastLogTerm}, 
+              {non_neg_integer(), non_neg_integer()},
+              CurrentTerm >= LastLogTerm).
+
+request_vote() ->
+    {CurrentTerm, LastLogTerm} = consistent_terms(),
+    #request_vote{
+        msg_id = non_blank_string(),
+        from = peer(),
+        %% TODO: The following three values really need to be generated in relation to one another
+        term = CurrentTerm,
+        last_log_index = non_neg_integer(),
+        last_log_term = LastLogTerm}.
 
 %% ====================================================================
 %% EQC Properties
