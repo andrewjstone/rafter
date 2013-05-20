@@ -27,3 +27,6 @@
             term :: non_neg_integer(),
             success :: boolean()}).
 
+-record(rafter_entry, {
+        term :: non_neg_integer(),
+        command :: binary()}).

@@ -96,21 +96,11 @@ follower(#append_entries{term=Term, from=From, msg_id=MsgId}=AppendEntries,
         true ->
             ok = rafter_log:truncate(AppendEntries#append_entries.prev_log_index),
             ok = rafter_log:append(AppendEntries#append_entries.entries),
-%%            apply_committed_entries(AppendEntries, State3),
+            %% apply_committed_entries(AppendEntries, State3),
             transfer:send(From, Rpy#append_entries_rpy{success=true}),
             {ok, follower, State3, election_timeout()}
     end.
 
-consistency_check(#append_entries{prev_log_index=Index, prev_log_term=Term}) ->
-    case rafter_log:get_entry(Index) of
-        not_found ->
-            false;
-        {entry, Term, _Command} ->
-            true;
-        {entry, _DifferentTerm, _Command} ->
-            false
-    end.
-%%
 %%candidate(timeout, #state{term=CurrentTerm}=State) ->
 %%    NewState = State#state{term = CurrentTerm + 1,
 %%                           responses = dict:new()},
@@ -126,8 +116,7 @@ consistency_check(#append_entries{prev_log_index=Index, prev_log_term=Term}) ->
 %%    NewResponses = dict:store(From, true, Responses),
 %%    case is_leader(NewResponses) of
 %%        true ->
-%%            NewState = State#state{responses=dict:new()},
-%%            ok = gen_fsm:send_event(self(), become_leader),
+%%            NewState = become_leader(State),
 %%            {ok, leader, NewState};
 %%        false ->
 %%            NewState = State#state{responses=NewResponses},
@@ -142,11 +131,15 @@ consistency_check(#append_entries{prev_log_index=Index, prev_log_term=Term}) ->
 %%    %% TODO: Should we reset the current term in State here?
 %%    {ok, follower, State, election_timeout()}.
 %%
-%%leader(become_leader, State) -> 
+%%become_leader(State) ->
 %%    Followers = initialize_followers(State),
-%%    NewState = State#state{followers=Followers},
+%%    NewState = State#state{followers=Followers,
+%%                           responses=dict:new()},
 %%    ok = send_empty_append_entries(NewState),
-%%    %% TODO: Put a timeout for retries here?
+%%    %% TODO: Retries?
+%%    NewState.
+
+%%leader(become_leader, State) -> 
 %%    {ok, leader, NewState};
 %%leader(#append_entries_rpy{from=From, success=false}, #state{followers=Followers}=State) ->
 %%    NextIndex = decrement_follower_index(From, Followers),
@@ -158,6 +151,16 @@ consistency_check(#append_entries{prev_log_index=Index, prev_log_term=Term}) ->
 %%=============================================================================
 %% Internal Functions 
 %%=============================================================================
+
+consistency_check(#append_entries{prev_log_index=Index, prev_log_term=Term}) ->
+    case rafter_log:get_entry(Index) of
+        not_found ->
+            false;
+        {entry, Term, _Command} ->
+            true;
+        {entry, _DifferentTerm, _Command} ->
+            false
+    end.
 
 set_term(Term, #state{term=CurrentTerm}=State) when Term < CurrentTerm ->
     State;
@@ -221,7 +224,7 @@ fail_vote(#request_vote{msg_id=MsgId}, CurrentTerm, Me) ->
 %%    NextIndex = rafter_log:last_index() + 1,
 %%    Followers = [{Peer, NextIndex} || Peer <- Peers],
 %%    dict:from_list(Followers).
-
+%%
 election_timeout(StartTime) ->
     timer:diff(os:timestamp(), StartTime) div 1000.
 

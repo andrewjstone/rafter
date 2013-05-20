@@ -9,12 +9,7 @@
 -include("rafter.hrl").
 -include("rafter_consensus_fsm.hrl").
 
-%% Public API
 -compile(export_all).
-
-%% eqc properties
--export([prop_monotonic_term/0,
-         prop_candidate_up_to_date/0]).
 
 -define(QC_OUT(P),
     eqc:on_output(fun(Str, Args) ->
@@ -44,54 +39,14 @@ setup() ->
 cleanup(_) ->
     ok.
 
-%% ====================================================================
-%% EQC Generators 
-%% ====================================================================
-me() ->
-    peer1.
-
-peers() ->
-    [peer2, peer3, peer4, peer5].
-
-peer() ->
-    oneof(peers()).
-
-%% Generate a lower 7-bit ACSII character that should not cause any problems
-%% with utf8 conversion.
-lower_char() ->
-    choose(16#20, 16#7f).
-
-not_empty(G) ->
-    ?SUCHTHAT(X, G, X /= [] andalso X /= <<>>).
-
-non_blank_string() ->
-    ?LET(X, not_empty(list(lower_char())), list_to_binary(X)).
-
-non_neg_integer() -> 
-    ?LET(X, int(), abs(X)).
-
-consistent_terms() ->
-    ?SUCHTHAT({CurrentTerm, LastLogTerm}, 
-              {non_neg_integer(), non_neg_integer()},
-              CurrentTerm >= LastLogTerm).
-
-request_vote() ->
-    {CurrentTerm, LastLogTerm} = consistent_terms(),
-    #request_vote{
-        msg_id = non_blank_string(),
-        from = peer(),
-        %% TODO: The following three values really need to be generated in relation to one another
-        term = CurrentTerm,
-        last_log_index = non_neg_integer(),
-        last_log_term = LastLogTerm}.
 
 %% ====================================================================
 %% EQC Properties
 %% ====================================================================
 prop_candidate_up_to_date() ->
     ?FORALL({CandidateTerm, CandidateIndex, LogTerm, LogIndex},
-            {non_neg_integer(), non_neg_integer(),
-             non_neg_integer(), non_neg_integer()},
+            {rafter_gen:non_neg_integer(), rafter_gen:non_neg_integer(),
+             rafter_gen:non_neg_integer(), rafter_gen:non_neg_integer()},
          begin
              Res = rafter_consensus_fsm:candidate_log_up_to_date(CandidateTerm,
                                                                  CandidateIndex,
@@ -112,7 +67,7 @@ prop_candidate_up_to_date() ->
 
 prop_monotonic_term() ->
     ?FORALL({Term, CurrentTerm},
-            {non_neg_integer(), non_neg_integer()},
+            {rafter_gen:non_neg_integer(), rafter_gen:non_neg_integer()},
             begin
                 State = #state{term=CurrentTerm},
                 case rafter_consensus_fsm:set_term(Term, State) of
@@ -122,6 +77,20 @@ prop_monotonic_term() ->
                         true = (Term >= CurrentTerm)
                 end
             end).
+
+%% ====================================================================
+%% EQC Generators 
+%% ====================================================================
+
+request_vote() ->
+    {CurrentTerm, LastLogTerm} = rafter_gen:consistent_terms(),
+    #request_vote {
+        msg_id = rafter_gen:non_blank_string(),
+        from = rafter_gen:peer(),
+        %% TODO: The following three values really need to be generated in relation to one another
+        term = CurrentTerm,
+        last_log_index = rafter_gen:non_neg_integer(),
+        last_log_term = LastLogTerm}.
 
 -endif.
 
