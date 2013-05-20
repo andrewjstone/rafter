@@ -66,9 +66,15 @@ handle_call({get_entry, Index}, _From, #state{entries=Entries}=State) ->
         not_found
     end, 
     {reply, {ok, Entry}, State};
+handle_call({truncate, 0}, _From, #state{entries=[]}=State) ->
+    {reply, ok, State};
+handle_call({truncate, Index}, _From, #state{entries=Entries}=State) 
+        when Index > length(Entries) ->
+    {reply, {error, bad_index}, State};
 handle_call({truncate, Index}, _From, #state{entries=Entries}=State) ->
     NewEntries = lists:reverse(lists:sublist(lists:reverse(Entries), Index)),
-    {reply, {ok, NewEntries}, State}.
+    NewState = State#state{entries=NewEntries},
+    {reply, ok, NewState}.
 
 handle_cast(stop, State) ->
     {stop, normal, State};
