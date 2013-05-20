@@ -50,7 +50,8 @@ initial_state() ->
 command(_S) ->
     oneof([{call, rafter_log, append, [entries()]},
            {call, rafter_log, get_last_index, []},
-           {call, rafter_log, get_last_entry, []}]).
+           {call, rafter_log, get_last_entry, []},
+           {call, rafter_log, get_entry, [rafter_gen:non_neg_integer()]}]).
 
 precondition(_S, _) ->
     true.
@@ -71,7 +72,13 @@ postcondition(S, {call, rafter_log, get_last_index, []}, V) ->
 postcondition(S, {call, rafter_log, get_last_entry, []}, {ok, not_found}) ->
     S#state.log_length =:= 0;
 postcondition(S, {call, rafter_log, get_last_entry, []}, {ok, Entry}) ->
-    S#state.term =:= Entry#rafter_entry.term.
+    S#state.term =:= Entry#rafter_entry.term;
+postcondition(S, {call, rafter_log, get_entry, [0]}, {ok, not_found}) ->
+    true;
+postcondition(S, {call, rafter_log, get_entry, [Index]}, {ok, not_found}) ->
+    S#state.log_length < Index;
+postcondition(S, {call, rafter_log, get_entry, [Index]}, {ok, _Entry}) ->
+    S#state.log_length >= Index.
 
 %% ====================================================================
 %% EQC Properties
@@ -83,7 +90,6 @@ prop_log() ->
             {ok, _Pid} = rafter_log:start(),
             {_H,_S,Res} = run_commands(?MODULE,Cmds),
             rafter_log:stop(),
-            io:format("Res = ~p",[Res]),
             Res==ok
         end).
 

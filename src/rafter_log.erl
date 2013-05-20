@@ -65,7 +65,7 @@ handle_call({get_entry, Index}, _From, #state{entries=Entries}=State) ->
     catch _:_ ->
         not_found
     end, 
-    {reply, Entry, State};
+    {reply, {ok, Entry}, State};
 handle_call({truncate, Index}, _From, #state{entries=Entries}=State) ->
     NewEntries = lists:reverse(lists:sublist(lists:reverse(Entries), Index)),
     {reply, {ok, NewEntries}, State}.
