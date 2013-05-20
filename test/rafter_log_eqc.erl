@@ -68,8 +68,10 @@ postcondition(_S, {call, rafter_log, append, [_Entries]}, _V=ok) ->
     true;
 postcondition(S, {call, rafter_log, get_last_index, []}, V) ->
     S#state.log_length  =:= V;
-postcondition(_S, {call, rafter_log, get_last_entry, []}, _V) ->
-    true.
+postcondition(S, {call, rafter_log, get_last_entry, []}, {ok, not_found}) ->
+    S#state.log_length =:= 0;
+postcondition(S, {call, rafter_log, get_last_entry, []}, {ok, Entry}) ->
+    S#state.term =:= Entry#rafter_entry.term.
 
 %% ====================================================================
 %% EQC Properties
