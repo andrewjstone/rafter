@@ -27,5 +27,8 @@ init([]) ->
     ConsensusFsm = { rafter_consensus_fsm,
                 {rafter_consensus_fsm, start_link, []},
                 permanent, 5000, worker, [rafter_consensus_fsm]},
-    {ok, { {one_for_one, 5, 10}, [ConsensusFsm]} }.
+    LogServer = { rafter_log,
+                {rafter_log, start_link, []},
+                permanent, 5000, worker, [rafter_log]},
+    {ok, { {one_for_one, 5, 10}, [ConsensusFsm, LogServer]} }.
 

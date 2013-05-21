@@ -9,7 +9,8 @@
 -define(ELECTION_TIMEOUT_MAX, 300).
 
 %% API
--export([start_link/0]).
+-export([start/0, stop/1, start/2, start_link/2,
+         request_vote/2, append_entries/2]).
 
 %% gen_fsm callbacks
 -export([init/1, code_change/4, handle_event/3, handle_info/3,
@@ -17,27 +18,47 @@
 
 %% States
 %%-export([leader/2, follower/2, candidate/2]).
--export([follower/2]).
+-export([follower/2, follower/3]).
 
 %% Testing outputs
 -export([set_term/2, candidate_log_up_to_date/4]).
 
-start_link() ->
-    gen_fsm:start_link(?MODULE, [], []).
+%% This function is simply for testing a single peer with erlang transport
+start() ->
+    Me = peer1,
+    Peers = [peer2, peer3, peer4, peer5],
+    start(Me, Peers).
+
+stop(Pid) ->
+    gen_fsm:send_all_state_event(Pid, stop).
+
+start(Me, Peers) ->
+    gen_fsm:start({local, Me}, ?MODULE, [Me, Peers], []).
+
+start_link(Me, Peers) ->
+    gen_fsm:start_link({local, Me}, ?MODULE, [Me, Peers], []).
+
+-spec request_vote(atom(), #request_vote{}) -> #vote{}.
+request_vote(To, Msg) ->
+    gen_fsm:sync_send_event(To, Msg).
+
+-spec append_entries(atom(), #append_entries{}) -> #append_entries_rpy{}.
+append_entries(To, Msg) ->
+    gen_fsm:sync_send_event(To, Msg).
 
 %%=============================================================================
 %% gen_fsm callbacks 
 %%=============================================================================
 
-init([]) ->
+init([Me, Peers]) ->
     random:seed(),
-    Me = rafter_config:get_id(),
-    Peers = rafter_config:get_peers(),
     State = #state{peers=Peers, me=Me, timer_start=os:timestamp()},
     {ok, follower, State, election_timeout()}.
 
+handle_event(stop, _, State) ->
+    {stop, normal, State};
 handle_event(_Event, _StateName, State) ->
-    {stop, badmsg, State}.
+    {stop, {error, badmsg}, State}.
 
 handle_sync_event(_Event, _From, _StateName, State) ->
     {stop, badmsg, State}.
@@ -57,48 +78,40 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 
 follower(timeout, State) ->
     NewState = State#state{timer_start = os:timestamp()},
-    {ok, candidate, NewState, election_timeout()};
-follower(#request_vote{from=CandidateId}=RequestVote, State) ->
+    {ok, candidate, NewState, election_timeout()}.
+
+follower(#request_vote{from=CandidateId}=RequestVote, _From, State) ->
     State2 = set_term(RequestVote#request_vote.term, State),
     State3 = State2#state{voted_for=undefined},
     {ok, Vote} = vote(RequestVote, State3),
     %% TODO:  rafter_log:write(NewState),
-    transfer:send(CandidateId, Vote),
     case Vote#vote.success of
         true ->
             State4 = State3#state{voted_for=CandidateId, 
                                   timer_start=os:timestamp()},
-            {ok, follower, State4, election_timeout()};
+            {reply, Vote, follower, State4, election_timeout()};
         false ->
-            {ok, follower, State3, election_timeout(State#state.timer_start)}
+            {reply, Vote, follower, State3, election_timeout(State#state.timer_start)}
     end;
 
-follower(#append_entries{term=Term, from=From, msg_id=MsgId}, 
-         #state{term=CurrentTerm, me=Me}=State) when CurrentTerm > Term ->
-    Rpy = #append_entries_rpy{msg_id=MsgId, 
-                              term=CurrentTerm, 
-                              from=Me, 
+follower(#append_entries{term=Term}, _From, 
+         #state{term=CurrentTerm}=State) when CurrentTerm > Term ->
+    Rpy = #append_entries_rpy{term=CurrentTerm, 
                               success=false},
-    transfer:send(From, Rpy),
-    {ok, follower, State, election_timeout(State#state.timer_start)};
-follower(#append_entries{term=Term, from=From, msg_id=MsgId}=AppendEntries,
-         #state{me=Me}=State) ->
+    {reply, Rpy, follower, State, election_timeout(State#state.timer_start)};
+follower(#append_entries{term=Term}=AppendEntries, _From, State) ->
     State2=set_term(AppendEntries#append_entries.term, State),
     State3=State2#state{timer_start=os:timestamp()},
-    Rpy = #append_entries_rpy{msg_id=MsgId,
-                              term=Term,
-                              from=Me,
-                              success=false},
+    Rpy = #append_entries_rpy{term=Term, success=false},
     case consistency_check(AppendEntries) of
         false ->
-            transfer:send(From, Rpy),
-            {ok, follower, State3, election_timeout()};
+            {reply, Rpy, follower, State3, election_timeout()};
         true ->
             ok = rafter_log:truncate(AppendEntries#append_entries.prev_log_index),
             ok = rafter_log:append(AppendEntries#append_entries.entries),
             %% apply_committed_entries(AppendEntries, State3),
-            transfer:send(From, Rpy#append_entries_rpy{success=true}),
-            {ok, follower, State3, election_timeout()}
+            NewRpy = Rpy#append_entries_rpy{success=true},
+            {reply, NewRpy, follower, State3, election_timeout()}
     end.
 
 %%candidate(timeout, #state{term=CurrentTerm}=State) ->
@@ -169,26 +182,26 @@ set_term(Term, #state{term=CurrentTerm}=State) when Term > CurrentTerm ->
 set_term(Term, #state{term=Term}=State) ->
     State.
 
-vote(#request_vote{term=Term}=RequestVote, #state{term=CurrentTerm, me=Me}) 
+vote(#request_vote{term=Term}, #state{term=CurrentTerm, me=Me}) 
         when Term < CurrentTerm ->
-    fail_vote(RequestVote, CurrentTerm, Me);
+    fail_vote(CurrentTerm, Me);
 vote(#request_vote{from=CandidateId, term=CurrentTerm}=RequestVote, 
      #state{voted_for=CandidateId, term=CurrentTerm, me=Me}) ->
     maybe_successful_vote(RequestVote, CurrentTerm, Me);
 vote(#request_vote{term=CurrentTerm}=RequestVote, 
      #state{voted_for=undefined, term=CurrentTerm, me=Me}) ->
     maybe_successful_vote(RequestVote, CurrentTerm, Me);
-vote(#request_vote{from=CandidateId, term=CurrentTerm}=RequestVote, 
+vote(#request_vote{from=CandidateId, term=CurrentTerm}, 
      #state{voted_for=AnotherId, term=CurrentTerm, me=Me}) 
      when AnotherId =/= CandidateId ->
-    fail_vote(RequestVote, CurrentTerm, Me).
+    fail_vote(CurrentTerm, Me).
 
 maybe_successful_vote(RequestVote, CurrentTerm, Me) ->
     case candidate_log_up_to_date(RequestVote) of
         true ->
-            successful_vote(RequestVote, CurrentTerm, Me);
+            successful_vote(CurrentTerm, Me);
         false ->
-            fail_vote(RequestVote, CurrentTerm, Me)
+            fail_vote(CurrentTerm, Me)
     end.
 
 candidate_log_up_to_date(#request_vote{last_log_term=CandidateTerm,
@@ -213,11 +226,11 @@ candidate_log_up_to_date(Term, CandidateIndex, Term, LogIndex)
 candidate_log_up_to_date(Term, Index, Term, Index) ->
     true.
 
-successful_vote(#request_vote{msg_id=MsgId}, CurrentTerm, Me) ->
-    {ok, #vote{msg_id=MsgId, term=CurrentTerm, from=Me, success=true}}.
+successful_vote(CurrentTerm, Me) ->
+    {ok, #vote{term=CurrentTerm, from=Me, success=true}}.
 
-fail_vote(#request_vote{msg_id=MsgId}, CurrentTerm, Me) ->
-    {ok, #vote{msg_id=MsgId, term=CurrentTerm, from=Me, success=false}}.
+fail_vote(CurrentTerm, Me) ->
+    {ok, #vote{term=CurrentTerm, from=Me, success=false}}.
 
 
 %%initialize_followers(#state{peers=Peers}=State) ->
