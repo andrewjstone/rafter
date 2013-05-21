@@ -19,6 +19,7 @@
             commitIndex :: non_neg_integer()}).
 
 -record(append_entries_rpy, {
+            from :: atom(),
             term :: non_neg_integer(),
             success :: boolean()}).
 

@@ -85,7 +85,6 @@ prop_monotonic_term() ->
 request_vote() ->
     {CurrentTerm, LastLogTerm} = rafter_gen:consistent_terms(),
     #request_vote {
-        msg_id = rafter_gen:non_blank_string(),
         from = rafter_gen:peer(),
         %% TODO: The following three values really need to be generated in relation to one another
         term = CurrentTerm,

@@ -39,6 +39,14 @@ get_last_index() ->
 get_last_entry() ->
     gen_server:call(?MODULE, get_last_entry).
 
+get_last_term() ->
+    case get_last_entry() of
+        {ok, #rafter_entry{term=Term}} ->
+            Term;
+        {ok, not_found} ->
+            0
+    end.
+
 get_entry(Index) ->
     gen_server:call(?MODULE, {get_entry, Index}).
 
