@@ -9,7 +9,7 @@
 -export([init/1]).
 
 start_link(Me, Peers) ->
-    SupName = list_to_atom(atom_to_list(me) ++ "_sup"),
+    SupName = list_to_atom(atom_to_list(Me) ++ "_sup"),
     supervisor:start_link({local, SupName}, ?MODULE, [Me, Peers]).
 
 init([Me, Peers]) ->
