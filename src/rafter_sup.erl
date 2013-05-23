@@ -1,16 +1,12 @@
-
 -module(rafter_sup).
 
 -behaviour(supervisor).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, start_peer/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
-
-%% Helper macro for declaring children of supervisor
--define(CHILD(I, Type), {I, {I, start_link, []}, permanent, 5000, Type, [I]}).
 
 %% ===================================================================
 %% API functions
@@ -19,16 +15,20 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+%% Start an individual peer. In production, this will only be called once 
+%% on each machine with node/local name semantics. 
+%% For testing, this allows us to start 5 nodes in one erlang VM and 
+%% communicate with local names.
+start_peer(Me, Peers) ->
+    ConsensusSup= {rafter_consensus_sup,
+                {rafter_consensus_sup, start_link, [Me, Peers]},
+                permanent, 5000, supervisor, [rafter_consensus_sup]},
+    supervisor:start_child(?MODULE, ConsensusSup).
+
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
 
 init([]) ->
-    ConsensusFsm = { rafter_consensus_fsm,
-                {rafter_consensus_fsm, start_link, []},
-                permanent, 5000, worker, [rafter_consensus_fsm]},
-    LogServer = { rafter_log,
-                {rafter_log, start_link, []},
-                permanent, 5000, worker, [rafter_log]},
-    {ok, { {one_for_one, 5, 10}, [ConsensusFsm, LogServer]} }.
+    {ok, { {one_for_one, 5, 10}, []} }.
 

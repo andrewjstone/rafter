@@ -5,8 +5,8 @@
 -include("rafter.hrl").
 
 %% API
--export([start/0, stop/0, start_link/0, append/1, get_last_entry/0, get_entry/1, 
-        get_term/1, get_last_index/0, truncate/1]).
+-export([start/0, stop/0, start_link/1, append/1, get_last_entry/0, get_entry/1, 
+        get_term/1, get_last_index/0, get_last_term/0, truncate/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -27,8 +27,8 @@ start() ->
 stop() ->
     gen_server:cast(?MODULE, stop).
 
-start_link() ->
-    gen_server:start_link(?MODULE, ?MODULE, [], []).
+start_link(Name) ->
+    gen_server:start_link({local, Name}, ?MODULE, [], []).
 
 append(Entries) ->
     gen_server:call(?MODULE, {append, Entries}).
