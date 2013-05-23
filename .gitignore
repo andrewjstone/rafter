@@ -1,3 +1,5 @@
+deps
+log
 ebin
 .eunit
 *.beam

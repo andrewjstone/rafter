@@ -12,7 +12,7 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-         code_change/3]).
+         code_change/3, format_status/2]).
 
 %% TODO: Make this a persistent log (bitcask?)
 -record(state, {
@@ -99,6 +99,10 @@ truncate(Name, Index) ->
 %%====================================================================
 init([]) ->
     {ok, #state{entries = []}}.
+
+format_status(_, [_, State]) ->
+    Data = lager:pr(State, ?MODULE),
+    [{data, [{"StateData", Data}]}].
 
 handle_call({append, NewEntries}, _From, #state{entries=Entries}=State) ->
     {reply, ok, State#state{entries=NewEntries++Entries}};

@@ -16,7 +16,7 @@
 
 %% gen_fsm callbacks
 -export([init/1, code_change/4, handle_event/3, handle_info/3,
-         handle_sync_event/4, terminate/3]).
+         handle_sync_event/4, terminate/3, format_status/2]).
 
 %% States
 -export([follower/2, follower/3, candidate/2, candidate/3, leader/2, leader/3]).
@@ -56,11 +56,16 @@ send_sync(To, Msg) ->
 init([Me, Peers]) ->
     random:seed(),
     Duration = election_timeout(),
-    State = #state{peers=Peers,
+    State = #state{term=0,
+                   peers=Peers,
                    me=Me, 
                    timer_start=os:timestamp(),
                    timer_duration = Duration},
     {ok, follower, State, Duration}.
+
+format_status(_, [_, State]) ->
+    Data = lager:pr(State, ?MODULE),
+    [{data, [{"StateData", Data}]}].
 
 handle_event(stop, _, State) ->
     {stop, normal, State};
