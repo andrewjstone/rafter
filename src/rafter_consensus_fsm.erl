@@ -18,7 +18,7 @@
          handle_sync_event/4, terminate/3]).
 
 %% States
--export([follower/2, follower/3, candidate/2, candidate/3, leader/2]).
+-export([follower/2, follower/3, candidate/2, candidate/3, leader/2, leader/3]).
 
 %% Testing outputs
 -export([set_term/2, candidate_log_up_to_date/4]).
@@ -79,6 +79,9 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 
 %%=============================================================================
 %% States
+%%
+%% Note: All RPC's requests get answered in State/3 functions.
+%% RPC Responses get handled in State/2 functions.
 %%=============================================================================
 
 %% Election timeout has expired. Go to candidate state.
@@ -246,8 +249,43 @@ leader(#append_entries_rpy{from=From, success=true},
        LastLogIndex = rafter_log:get_last_index(),
        maybe_send_entry(From, NextIndex, LastLogIndex, NewState),
        Timeout = timeout(State#state.timer_start, State#state.timer_duration),
-       {ok, leader, NewState, Timeout}.
-       
+       {ok, leader, NewState, Timeout};
+
+%% Ignore stale votes.
+leader(#vote{}, #state{timer_start=Start, timer_duration=Duration}=State) ->
+    {ok, leader, State, timeout(Start, Duration)}.
+
+%% An out of date leader is sending append_entries, tell it to step down.
+leader(#append_entries{term=Term}, _From, #state{term=CurrentTerm, me=Me}=State) 
+        when Term < CurrentTerm ->
+    Rpy = #append_entries_rpy{from=Me, term=CurrentTerm, success=false},
+    Timeout = timeout(State#state.timer_start, State#state.timer_duration),
+    {reply, Rpy, leader, State, Timeout};
+
+%% We are out of date. Step down
+leader(#append_entries{term=Term}, _From, #state{term=CurrentTerm}=State) 
+        when Term > CurrentTerm ->
+        Duration = election_timeout(),
+        {ok, follower, State#state{term=Term, 
+                                   responses=dict:new(),
+                                   timer_duration=Duration,
+                                   timer_start=os:timestamp()}, Duration};
+
+%% We are out of date. Step down
+leader(#request_vote{term=Term}, _From, #state{term=CurrentTerm}=State)
+        when Term > CurrentTerm ->
+    Duration = election_timeout(),
+    {ok, follower, State#state{term=Term, 
+                               responses=dict:new(),
+                               timer_duration=Duration,
+                               timer_start=os:timestamp()}, Duration};
+
+%% An out of date candidate is trying to steal our leadership role. Stop it.
+leader(#request_vote{}, _From, #state{me=Me, term=CurrentTerm}=State) ->
+    Rpy = #vote{from=Me, term=CurrentTerm, success=false},
+    Timeout = timeout(State#state.timer_start, State#state.timer_duration),
+    {reply, Rpy, leader, State, Timeout}.
+
 %%=============================================================================
 %% Internal Functions 
 %%=============================================================================
