@@ -115,16 +115,15 @@ follower(#request_vote{from=CandidateId}=RequestVote, _From, State) ->
     end;
 
 follower(#append_entries{term=Term}, _From, 
-         #state{term=CurrentTerm}=State) when CurrentTerm > Term ->
-    Rpy = #append_entries_rpy{term=CurrentTerm, 
-                              success=false},
+         #state{term=CurrentTerm, me=Me}=State) when CurrentTerm > Term ->
+    Rpy = #append_entries_rpy{from=Me, term=CurrentTerm, success=false},
     Timeout = timeout(State#state.timer_start, State#state.timer_duration),
     {reply, Rpy, follower, State, Timeout};
-follower(#append_entries{term=Term}=AppendEntries, _From, State) ->
+follower(#append_entries{term=Term}=AppendEntries, _From, #state{me=Me}=State) ->
     Duration = election_timeout(),
     State2=set_term(AppendEntries#append_entries.term, State),
     State3=State2#state{timer_start=os:timestamp(), timer_duration=Duration},
-    Rpy = #append_entries_rpy{term=Term, success=false},
+    Rpy = #append_entries_rpy{term=Term, success=false, from=Me},
     case consistency_check(AppendEntries) of
         false ->
             {reply, Rpy, follower, State3, Duration};
