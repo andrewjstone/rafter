@@ -70,6 +70,7 @@ prop_monotonic_term() ->
             {rafter_gen:non_neg_integer(), rafter_gen:non_neg_integer()},
             begin
                 State = #state{term=CurrentTerm},
+                io:format("~p ~p", [Term, State]),
                 case rafter_consensus_fsm:set_term(Term, State) of
                     #state{term=CurrentTerm} ->
                         true = (Term =< CurrentTerm);

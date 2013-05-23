@@ -6,7 +6,10 @@
     last_log_index :: non_neg_integer(),
 
     %% The last time a timer was created
-    timer_start:: non_neg_integer(),
+    timer_start :: non_neg_integer(),
+
+    %% The duration of the timer
+    timer_duration :: non_neg_integer(),
 
     %% leader state
     followers = dict:new() :: dict(),

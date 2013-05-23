@@ -6,7 +6,7 @@
 
 %% API
 -export([start/0, stop/0, start_link/0, append/1, get_last_entry/0, get_entry/1, 
-        get_last_index/0, truncate/1]).
+        get_term/1, get_last_index/0, truncate/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -49,6 +49,14 @@ get_last_term() ->
 
 get_entry(Index) ->
     gen_server:call(?MODULE, {get_entry, Index}).
+
+get_term(Index) ->
+    case get_entry(Index) of
+        {ok, #rafter_entry{term=Term}} ->
+            Term;
+        {ok, not_found} ->
+            0
+    end.
 
 truncate(Index) ->
     gen_server:call(?MODULE, {truncate, Index}).

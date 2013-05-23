@@ -7,6 +7,7 @@
 
 -define(ELECTION_TIMEOUT_MIN, 150).
 -define(ELECTION_TIMEOUT_MAX, 300).
+-define(HEARTBEAT_TIMEOUT, 15).
 -define(QUORUM, 3).
 
 %% API
@@ -17,8 +18,7 @@
          handle_sync_event/4, terminate/3]).
 
 %% States
-%%-export([leader/2, follower/2, candidate/2]).
--export([follower/2, follower/3, candidate/2, candidate/3]).
+-export([follower/2, follower/3, candidate/2, candidate/3, leader/2]).
 
 %% Testing outputs
 -export([set_term/2, candidate_log_up_to_date/4]).
@@ -53,8 +53,12 @@ send_sync(To, Msg) ->
 
 init([Me, Peers]) ->
     random:seed(),
-    State = #state{peers=Peers, me=Me, timer_start=os:timestamp()},
-    {ok, follower, State, election_timeout()}.
+    Duration = election_timeout(),
+    State = #state{peers=Peers,
+                   me=Me, 
+                   timer_start=os:timestamp(),
+                   timer_duration = Duration},
+    {ok, follower, State, Duration}.
 
 handle_event(stop, _, State) ->
     {stop, normal, State};
@@ -79,14 +83,14 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 
 %% Election timeout has expired. Go to candidate state.
 follower(timeout, State) ->
-    NewState = State#state{timer_start = os:timestamp()},
-    {ok, candidate, NewState, 0};
+    {ok, candidate, State, 0};
 
 %% Ignore stale messages.
-follower(#vote{}, State) ->
-    {ok, follower, State, election_timeout(State#state.timer_start)};
-follower(#append_entries_rpy{}, State) ->
-    {ok, follower, State, election_timeout(State#state.timer_start)}.
+follower(#vote{}, #state{timer_start=Start, timer_duration=Duration}=State) ->
+    {ok, follower, State, timeout(Start, Duration)};
+follower(#append_entries_rpy{}, #state{timer_start=Start, 
+                                       timer_duration=Duration}=State) ->
+    {ok, follower, State, timeout(Start, Duration)}.
 
 %% Vote for this candidate
 follower(#request_vote{from=CandidateId}=RequestVote, _From, State) ->
@@ -96,58 +100,70 @@ follower(#request_vote{from=CandidateId}=RequestVote, _From, State) ->
     %% TODO:  rafter_log:write(NewState),
     case Vote#vote.success of
         true ->
+            Duration = election_timeout(),
             State4 = State3#state{voted_for=CandidateId, 
+                                  timer_duration=Duration, 
                                   timer_start=os:timestamp()},
-            {reply, Vote, follower, State4, election_timeout()};
+            {reply, Vote, follower, State4, Duration};
         false ->
-            {reply, Vote, follower, State3, election_timeout(State#state.timer_start)}
+            Timeout = timeout(State#state.timer_start, 
+                              State#state.timer_duration),
+            {reply, Vote, follower, State3, Timeout}
     end;
 
 follower(#append_entries{term=Term}, _From, 
          #state{term=CurrentTerm}=State) when CurrentTerm > Term ->
     Rpy = #append_entries_rpy{term=CurrentTerm, 
                               success=false},
-    {reply, Rpy, follower, State, election_timeout(State#state.timer_start)};
+    Timeout = timeout(State#state.timer_start, State#state.timer_duration),
+    {reply, Rpy, follower, State, Timeout};
 follower(#append_entries{term=Term}=AppendEntries, _From, State) ->
+    Duration = election_timeout(),
     State2=set_term(AppendEntries#append_entries.term, State),
-    State3=State2#state{timer_start=os:timestamp()},
+    State3=State2#state{timer_start=os:timestamp(), timer_duration=Duration},
     Rpy = #append_entries_rpy{term=Term, success=false},
     case consistency_check(AppendEntries) of
         false ->
-            {reply, Rpy, follower, State3, election_timeout()};
+            {reply, Rpy, follower, State3, Duration};
         true ->
             ok = rafter_log:truncate(AppendEntries#append_entries.prev_log_index),
             ok = rafter_log:append(AppendEntries#append_entries.entries),
             %% apply_committed_entries(AppendEntries, State3),
             NewRpy = Rpy#append_entries_rpy{success=true},
-            {reply, NewRpy, follower, State3, election_timeout()}
+            {reply, NewRpy, follower, State3, Duration}
     end.
 
 %% The election timeout has elapsed so start an election
 candidate(timeout, #state{term=CurrentTerm}=State) ->
+    Duration = election_timeout(),
     NewState = State#state{term = CurrentTerm + 1,
                            responses = dict:new(),
+                           timer_duration = Duration,
                            timer_start=os:timestamp()},
     request_votes(State),
-    {ok, candidate, NewState, election_timeout()};
+    {ok, candidate, NewState, Duration};
 
 %% We are out of date. Go back to follower state. 
 candidate(#vote{term=VoteTerm, success=false}, #state{term=Term}=State) 
          when VoteTerm > Term ->
+    Duration = election_timeout(),
     NewState = State#state{term=VoteTerm, 
                            responses=dict:new(), 
+                           timer_duration=Duration,
                            timer_start=os:timestamp()},
-    {ok, follower, NewState, election_timeout()};  
+    {ok, follower, NewState, Duration};
 
 %% This is a stale vote from an old request. Ignore it.
 candidate(#vote{term=VoteTerm}, #state{term=CurrentTerm}=State)
     when VoteTerm < CurrentTerm ->
-        {ok, candidate, State, election_timeout(State#state.timer_start)};
+        Timeout = timeout(State#state.timer_start, State#state.timer_duration),
+        {ok, candidate, State, Timeout};
 
 candidate(#vote{success=false, from=From}, #state{responses=Responses}=State) ->
     NewResponses = dict:store(From, false, Responses),
     NewState = State#state{responses=NewResponses},
-    {ok, candidate, NewState, election_timeout(State#state.timer_start)};
+    Timeout = timeout(State#state.timer_start, State#state.timer_duration),
+    {ok, candidate, NewState, Timeout};
 
 %% Sweet, someone likes us! Do we have enough votes to get elected?
 candidate(#vote{success=true, from=From}, #state{responses=Responses}=State) ->
@@ -158,28 +174,122 @@ candidate(#vote{success=true, from=From}, #state{responses=Responses}=State) ->
             {ok, leader, NewState, 0};
         false ->
             NewState = State#state{responses=NewResponses},
-            {ok, candidate, NewState, election_timeout(State#state.timer_start)}
+            Timeout = timeout(State#state.timer_start, 
+                              State#state.timer_duration),
+            {ok, candidate, NewState, Timeout}
     end.
 
 %% A Peer is simultaneously trying to become the leader
 %% If it has a higher term, step down and become follower.
 candidate(#request_vote{term=RequestTerm}, _From, #state{term=Term}=State) 
          when RequestTerm > Term ->
+    Duration = election_timeout(),
     {ok, follower, State#state{term = RequestTerm, 
                                responses=dict:new(),
-                               timer_start=os:timestamp()}, election_timeout()};
-candidate(#request_vote{}, _From, State) ->
-    {ok, candidate, State, election_timeout(State#state.timer_start)};
+                               timer_duration=Duration,
+                               timer_start=os:timestamp()}, Duration};
+candidate(#request_vote{}, _From, #state{timer_duration=D, timer_start=S}=State) ->
+    {ok, candidate, State, timeout(S, D)};
 
 %% Another peer is asserting itself as leader. If it has a current term
 %% step down and become follower. Otherwise do nothing
 candidate(#append_entries{term=RequestTerm}, _From, #state{term=CurrentTerm}=State)
         when RequestTerm >= CurrentTerm ->
+    Duration = election_timeout(),
     State2 = set_term(RequestTerm, State),
-    State3 = State2#state{timer_start=os:timestamp()},
-    {ok, follower, State3, election_timeout()};
+    State3 = State2#state{timer_duration=Duration, timer_start=os:timestamp()},
+    {ok, follower, State3, Duration};
 candidate(#append_entries{}, _From, State) ->
-    {ok, candidate, State, election_timeout(State#state.timer_start)}.
+    Timeout = timeout(State#state.timer_start, State#state.timer_duration),
+    {ok, candidate, State, Timeout}.
+
+leader(timeout, State) ->
+    Duration = heartbeat_timeout(),
+    NewState = State#state{timer_start=os:timestamp(), timer_duration=Duration},
+    send_append_entries(State),
+    {ok, leader, NewState, Duration};
+
+%% We are out of date. Go back to follower state.
+leader(#append_entries_rpy{term=Term, success=false}, 
+       #state{term=CurrentTerm}=State) when Term > CurrentTerm ->
+    Duration = election_timeout(),
+    NewState = State#state{term=Term,
+                           responses=dict:new(),
+                           timer_duration=Duration,
+                           timer_start=os:timestamp()},
+    {ok, follower, NewState, Duration};
+
+%% The follower is not synced yet. Try the previous entry
+leader(#append_entries_rpy{from=From, success=false}, 
+       #state{followers=Followers}=State) ->
+    NextIndex = decrement_follower_index(From, Followers),
+    NewState = State#state{followers=dict:store(From, NextIndex, Followers)},
+    LastLogIndex = rafter_log:get_last_index(),
+    maybe_send_entry(From, NextIndex, LastLogIndex, NewState),
+    Timeout = timeout(State#state.timer_start, State#state.timer_duration),
+    {ok, leader, NewState, Timeout};
+
+%% This is a stale reply from an old request. Ignore it.
+leader(#append_entries_rpy{term=Term, success=true}, 
+       #state{term=CurrentTerm}=State) when CurrentTerm > Term ->
+    Timeout = timeout(State#state.timer_start, State#state.timer_duration),
+    {ok, leader, State, Timeout};
+
+%% Success!
+leader(#append_entries_rpy{from=From, success=true}, 
+       #state{followers=Followers}=State) ->
+       %% TODO: Check to see if this is the latest log index and
+       %%       commit if quorum reached.
+
+       NextIndex = increment_follower_index(From, Followers),
+       NewState = State#state{followers=dict:store(From, NextIndex, Followers)},
+       LastLogIndex = rafter_log:get_last_index(),
+       maybe_send_entry(From, NextIndex, LastLogIndex, NewState),
+       Timeout = timeout(State#state.timer_start, State#state.timer_duration),
+       {ok, leader, NewState, Timeout}.
+       
+%%=============================================================================
+%% Internal Functions 
+%%=============================================================================
+
+maybe_send_entry(_Peer, Index, LastLogIndex, _State) 
+        when LastLogIndex < Index ->
+    ok;
+maybe_send_entry(Peer, Index, LastLogIndex, State)
+        when LastLogIndex >= Index ->
+    send_entry(Peer, Index, State).
+
+send_entry(Peer, Index, #state{me=Me, term=Term}) ->
+    {Entries, PrevLogIndex, PrevLogTerm} = 
+        case Index - 1 of
+            0 -> 
+                {[], 0, 0};
+            PrevIndex ->
+                {[rafter_log:get_entry(Index)],
+                  PrevIndex,
+                  rafter_log:get_term(PrevIndex)}
+        end,
+    AppendEntries = #append_entries{term=Term,
+                                    from=Me,
+                                    prev_log_index=PrevLogIndex,
+                                    prev_log_term=PrevLogTerm,
+                                    entries=Entries},
+    rafter_requester:send(Peer, AppendEntries).
+
+send_append_entries(#state{followers=Followers}=State) ->
+    [send_entry(Peer, Index, State) || {Peer, Index} <- dict:to_list(Followers)].
+
+increment_follower_index(From, Followers) ->
+    {ok, Num} = dict:find(From, Followers), 
+    Num + 1.
+
+decrement_follower_index(From, Followers) ->
+    case dict:find(From, Followers) of
+        {ok, 0} ->
+            0;
+        {ok, Num} ->
+            Num - 1
+    end.
 
 %% @doc Inspect the votes to see if we have a quorum.
 -spec is_leader(dict()) -> boolean().
@@ -211,20 +321,6 @@ initialize_followers(Peers) ->
     NextIndex = rafter_log:get_last_index() + 1,
     Followers = [{Peer, NextIndex} || Peer <- Peers],
     dict:from_list(Followers).
-
-
-%%leader(become_leader, State) -> 
-%%    {ok, leader, NewState};
-%%leader(#append_entries_rpy{from=From, success=false}, #state{followers=Followers}=State) ->
-%%    NextIndex = decrement_follower_index(From, Followers),
-%%    ok = send_append_entries(From, NextIndex),
-%%    NewState = State#state{followers=dict:store(From, NextIndex, Followers)},
-%%    {ok, leader, NewState};
-%%leader(#append_entries_rpy{from=From, success=true}, #state{responses=Responses}=State) ->
-
-%%=============================================================================
-%% Internal Functions 
-%%=============================================================================
 
 consistency_check(#append_entries{prev_log_index=Index, prev_log_term=Term}) ->
     case rafter_log:get_entry(Index) of
@@ -294,12 +390,20 @@ fail_vote(CurrentTerm, Me) ->
     {ok, #vote{term=CurrentTerm, success=false, from=Me}}.
 
 
-election_timeout(StartTime) ->
-    timer:diff(os:timestamp(), StartTime) div 1000.
+timeout(StartTime, Duration) ->
+    case Duration - (timer:now_diff(os:timestamp(), StartTime) div 1000) of
+        T when T > 0 ->
+            T;
+        _ ->
+            0
+    end.
 
 election_timeout() ->
     ?ELECTION_TIMEOUT_MIN + random:uniform(?ELECTION_TIMEOUT_MAX - 
                                            ?ELECTION_TIMEOUT_MIN).
+
+heartbeat_timeout() ->
+    ?HEARTBEAT_TIMEOUT.
 
 %%=============================================================================
 %% Tests 
@@ -308,13 +412,5 @@ election_timeout() ->
 -ifdef(TEST).
 
 -include_lib("eunit/include/eunit.hrl").
-
-follower_timeout_test() ->
-    {ok, candidate, NewState, _Timeout} = 
-        rafter_consensus_fsm:follower(timeout, #state{}),
-    assert_timer_start(NewState).
-
-assert_timer_start(State) ->
-    ?assertNotEqual(State#state.timer_start, undefined).
 
 -endif.
