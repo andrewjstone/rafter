@@ -1,4 +1,5 @@
-Rafter is an erlang implementation of the raft consensus protocol.
+Rafter is an erlang implementation of the [raft consensus protocol](https://ramcloud.stanford.edu/wiki/download/attachments/11370504/raft.pdf) .
+
 
 # starting a node from the repl
 
