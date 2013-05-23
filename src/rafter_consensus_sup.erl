@@ -17,7 +17,7 @@ init([Me, Peers]) ->
                     {rafter_consensus_fsm, start_link, [Me, Peers]},
                     permanent, 5000, worker, [rafter_consensus_fsm]},
 
-    LogName = list_to_atom(atom_to_list(me) ++ "_log"),
+    LogName = list_to_atom(atom_to_list(Me) ++ "_log"),
     LogServer = { rafter_log,
                  {rafter_log, start_link, [LogName]},
                  permanent, 5000, worker, [rafter_log]},
