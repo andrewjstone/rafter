@@ -5,8 +5,10 @@
 -include("rafter.hrl").
 
 %% API
--export([start/0, stop/0, start_link/1, append/1, get_last_entry/0, get_entry/1, 
-        get_term/1, get_last_index/0, get_last_term/0, truncate/1]).
+-export([start/0, stop/0, start_link/1, append/1, append/2, 
+        get_last_entry/0, get_last_entry/1, get_entry/1, get_entry/2,
+        get_term/1, get_term/2, get_last_index/0, get_last_index/1, 
+        get_last_term/0, get_last_term/1, truncate/1, truncate/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -33,11 +35,20 @@ start_link(Name) ->
 append(Entries) ->
     gen_server:call(?MODULE, {append, Entries}).
 
+append(Name, Entries) ->
+    gen_server:call(Name, {append, Entries}).
+
 get_last_index() ->
     gen_server:call(?MODULE, get_last_index).
 
+get_last_index(Name) ->
+    gen_server:call(Name, get_last_index).
+
 get_last_entry() ->
     gen_server:call(?MODULE, get_last_entry).
+
+get_last_entry(Name) ->
+    gen_server:call(Name, get_last_entry).
 
 get_last_term() ->
     case get_last_entry() of
@@ -47,8 +58,19 @@ get_last_term() ->
             0
     end.
 
+get_last_term(Name) ->
+    case get_last_entry(Name) of
+        {ok, #rafter_entry{term=Term}} ->
+            Term;
+        {ok, not_found} ->
+            0
+    end.
+
 get_entry(Index) ->
     gen_server:call(?MODULE, {get_entry, Index}).
+
+get_entry(Name, Index) ->
+    gen_server:call(Name, {get_entry, Index}).
 
 get_term(Index) ->
     case get_entry(Index) of
@@ -58,8 +80,19 @@ get_term(Index) ->
             0
     end.
 
+get_term(Name, Index) ->
+    case get_entry(Name, Index) of
+        {ok, #rafter_entry{term=Term}} ->
+            Term;
+        {ok, not_found} ->
+            0
+    end.
+
 truncate(Index) ->
     gen_server:call(?MODULE, {truncate, Index}).
+
+truncate(Name, Index) ->
+    gen_server:call(Name, {truncate, Index}).
 
 %%====================================================================
 %% gen_server callbacks

@@ -22,4 +22,4 @@ init([Me, Peers]) ->
                  {rafter_log, start_link, [LogName]},
                  permanent, 5000, worker, [rafter_log]},
 
-    {ok, { {one_for_all, 5, 10}, [ConsensusFsm, LogServer]} }.
+    {ok, { {one_for_all, 5, 10}, [LogServer, ConsensusFsm]} }.
