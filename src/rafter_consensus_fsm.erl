@@ -59,6 +59,8 @@ init([Me, Peers]) ->
     State = #state{term=0,
                    peers=Peers,
                    me=Me, 
+                   responses=dict:new(),
+                   followers=[],
                    timer_start=os:timestamp(),
                    timer_duration = Duration},
     {ok, follower, State, Duration}.
@@ -137,19 +139,14 @@ candidate(timeout, #state{term=CurrentTerm, me=Me}=State) ->
                            timer_duration = Duration,
                            timer_start=os:timestamp(),
                            voted_for=Me},
-    request_votes(State),
+    request_votes(NewState),
     {next_state, candidate, NewState, Duration};
 
 %% We are out of date. Go back to follower state. 
 candidate(#vote{term=VoteTerm, success=false}, #state{term=Term}=State) 
          when VoteTerm > Term ->
-    Duration = election_timeout(),
-    NewState = State#state{term=VoteTerm, 
-                           voted_for=undefined,
-                           responses=dict:new(), 
-                           timer_duration=Duration,
-                           timer_start=os:timestamp()},
-    {next_state, follower, NewState, Duration};
+    NewState = step_down(VoteTerm, State),
+    {next_state, follower, NewState, NewState#state.timer_duration};
 
 %% This is a stale vote from an old request. Ignore it.
 candidate(#vote{term=VoteTerm}, #state{term=CurrentTerm}=State)
@@ -158,7 +155,6 @@ candidate(#vote{term=VoteTerm}, #state{term=CurrentTerm}=State)
         {next_state, candidate, State, Timeout};
 
 candidate(#vote{success=false, from=From}, #state{responses=Responses}=State) ->
-    io:format("fail whale", []),
     NewResponses = dict:store(From, false, Responses),
     NewState = State#state{responses=NewResponses},
     Timeout = timeout(State#state.timer_start, State#state.timer_duration),
@@ -166,7 +162,6 @@ candidate(#vote{success=false, from=From}, #state{responses=Responses}=State) ->
 
 %% Sweet, someone likes us! Do we have enough votes to get elected?
 candidate(#vote{success=true, from=From}, #state{responses=Responses}=State) ->
-    io:format("success vote", []),
     NewResponses = dict:store(From, true, Responses),
     case is_leader(NewResponses) of
         true ->
@@ -270,12 +265,8 @@ leader(#append_entries{term=Term}, _From, #state{term=CurrentTerm}=State)
 %% We are out of date. Step down
 leader(#request_vote{term=Term}, _From, #state{term=CurrentTerm}=State)
         when Term > CurrentTerm ->
-    Duration = election_timeout(),
-    {next_state, follower, State#state{term=Term, 
-                               responses=dict:new(),
-                               voted_for=undefined,
-                               timer_duration=Duration,
-                               timer_start=os:timestamp()}, Duration};
+    NewState = step_down(Term, State),
+    {next_state, follower, NewState, NewState#state.timer_duration};
 
 %% An out of date candidate is trying to steal our leadership role. Stop it.
 leader(#request_vote{}, _From, #state{me=Me, term=CurrentTerm}=State) ->
@@ -296,20 +287,17 @@ step_down(NewTerm, State) ->
                 leader=undefined}.
 
 handle_request_vote(#request_vote{from=CandidateId, term=Term}=RequestVote, State) ->
-    io:format("HANDLE REQUEST VOTE"),
     State2 = set_term(Term, State),
     {ok, Vote} = vote(RequestVote, State2),
     %% TODO:  rafter_log:write(NewState),
     case Vote#vote.success of
         true ->
-            io:format("Successful vote from ~p for ~p", [CandidateId, State#state.me]),
             Duration = election_timeout(),
             State3 = State2#state{voted_for=CandidateId, 
                                   timer_duration=Duration, 
                                   timer_start=os:timestamp()},
             {reply, Vote, follower, State3, Duration};
         false ->
-            io:format("Failed vote from ~p for ~p", [CandidateId, State#state.me]),
             Timeout = timeout(State#state.timer_start, 
                               State#state.timer_duration),
             {reply, Vote, follower, State2, Timeout}
@@ -361,7 +349,6 @@ is_leader(Responses) ->
     SuccessfulVotes = dict:filter(fun(_, V) ->
                                       V =:= true
                                   end, Responses),
-    io:format("SUCCESSFULVOTES= ~p", [SuccessfulVotes]),
     %% The +1 is because we voted for ourselves, but don't actually send or handle
     %% the messages. TODO: actually write our vote out to the log at some point.
     dict:size(SuccessfulVotes) + 1 >= ?QUORUM.
@@ -392,7 +379,7 @@ initialize_followers(#state{peers=Peers}=State) ->
 consistency_check(#append_entries{prev_log_index=Index, 
                                   prev_log_term=Term}, State) ->
     case rafter_log:get_entry(?logname(), Index) of
-        not_found ->
+        {ok, not_found} ->
             false;
         {entry, Term, _Command} ->
             true;
@@ -470,8 +457,7 @@ timeout(StartTime, Duration) ->
     end.
 
 election_timeout() ->
-    ?ELECTION_TIMEOUT_MIN + random:uniform(?ELECTION_TIMEOUT_MAX - 
-                                           ?ELECTION_TIMEOUT_MIN).
+    crypto:rand_uniform(?ELECTION_TIMEOUT_MIN, ?ELECTION_TIMEOUT_MAX).
 
 heartbeat_timeout() ->
     ?HEARTBEAT_TIMEOUT.
