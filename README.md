@@ -16,7 +16,7 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 
 ### Show the current state of the consensus fsm
 
-    %% peer1 is the name of the consensus fsm
+    %% peer1 is the name of a peer consensus fsm
     sys:get_status(peer1).  
 
 ### Show the current state of the log for a peer
@@ -29,4 +29,4 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 
 ### running tests
 
-    ./rebar eunit
+    ./rebar eunit skip_deps=true
