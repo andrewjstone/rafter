@@ -7,7 +7,7 @@
 
 -define(ELECTION_TIMEOUT_MIN, 150).
 -define(ELECTION_TIMEOUT_MAX, 300).
--define(HEARTBEAT_TIMEOUT, 15).
+-define(HEARTBEAT_TIMEOUT, 75).
 -define(QUORUM, 3).
 -define(logname(), logname(State#state.me)).
 
@@ -113,9 +113,10 @@ follower(#append_entries{term=Term}, _From,
     Rpy = #append_entries_rpy{from=Me, term=CurrentTerm, success=false},
     Timeout = timeout(State#state.timer_start, State#state.timer_duration),
     {reply, Rpy, follower, State, Timeout};
-follower(#append_entries{term=Term}=AppendEntries, _From, #state{me=Me}=State) ->
+follower(#append_entries{term=Term, from=From}=AppendEntries, _From, 
+         #state{me=Me}=State) ->
     Duration = election_timeout(),
-    State2=set_term(AppendEntries#append_entries.term, State),
+    State2=set_term(Term, State),
     State3=State2#state{timer_start=os:timestamp(), timer_duration=Duration},
     Rpy = #append_entries_rpy{term=Term, success=false, from=Me},
     case consistency_check(AppendEntries, State3) of
@@ -128,7 +129,8 @@ follower(#append_entries{term=Term}=AppendEntries, _From, #state{me=Me}=State) -
             ok = rafter_log:append(Log, AppendEntries#append_entries.entries),
             %% apply_committed_entries(AppendEntries, State3),
             NewRpy = Rpy#append_entries_rpy{success=true},
-            {reply, NewRpy, follower, State3, Duration}
+            State4 = State3#state{leader=From},
+            {reply, NewRpy, follower, State4, Duration}
     end.
 
 %% The election timeout has elapsed so start an election
@@ -138,6 +140,7 @@ candidate(timeout, #state{term=CurrentTerm, me=Me}=State) ->
                            responses = dict:new(),
                            timer_duration = Duration,
                            timer_start=os:timestamp(),
+                           leader=undefined,
                            voted_for=Me},
     request_votes(NewState),
     {next_state, candidate, NewState, Duration};
@@ -311,16 +314,21 @@ maybe_send_entry(Peer, Index, LastLogIndex, State)
     send_entry(Peer, Index, State).
 
 send_entry(Peer, Index, #state{me=Me, term=Term}=State) ->
-    {Entries, PrevLogIndex, PrevLogTerm} = 
+    Log = ?logname(),
+    {PrevLogIndex, PrevLogTerm} = 
         case Index - 1 of
             0 -> 
-                {[], 0, 0};
+                {0, 0};
             PrevIndex ->
-                Log = ?logname(),
-                {[rafter_log:get_entry(Log, Index)],
-                  PrevIndex,
+                {PrevIndex,
                   rafter_log:get_term(Log, PrevIndex)}
         end,
+    Entries = case rafter_log:get_entry(Log, Index) of
+                  {ok, not_found} -> 
+                      [];
+                  Entry -> 
+                      [Entry]
+              end,
     AppendEntries = #append_entries{term=Term,
                                     from=Me,
                                     prev_log_index=PrevLogIndex,
@@ -337,8 +345,8 @@ increment_follower_index(From, Followers) ->
 
 decrement_follower_index(From, Followers) ->
     case dict:find(From, Followers) of
-        {ok, 0} ->
-            0;
+        {ok, 1} ->
+            1;
         {ok, Num} ->
             Num - 1
     end.
@@ -366,9 +374,10 @@ request_votes(#state{peers=Peers, term=Term, me=Me}=State) ->
                         last_log_term=rafter_log:get_last_term(Log)},
     [rafter_requester:send(Peer, Msg) || Peer <- Peers].
 
-become_leader(State) ->
-    Followers = initialize_followers(State),
-    State#state{followers=Followers,
+become_leader(#state{me=Me}=State) ->
+    %% TODO: Commit a noop entry to the log so we can move the commit index
+    State#state{leader=Me, 
+                followers=initialize_followers(State),
                 timer_start=os:timestamp()}.
 
 initialize_followers(#state{peers=Peers}=State) ->
@@ -376,14 +385,18 @@ initialize_followers(#state{peers=Peers}=State) ->
     Followers = [{Peer, NextIndex} || Peer <- Peers],
     dict:from_list(Followers).
 
+%% There is no entry at t=0, so just return true.
+consistency_check(#append_entries{prev_log_index=0, 
+                                  prev_log_term=0}, _State) ->
+    true;
 consistency_check(#append_entries{prev_log_index=Index, 
                                   prev_log_term=Term}, State) ->
     case rafter_log:get_entry(?logname(), Index) of
         {ok, not_found} ->
             false;
-        {entry, Term, _Command} ->
+        {ok, {entry, Term, _Command}} ->
             true;
-        {entry, _DifferentTerm, _Command} ->
+        {ok, {entry, _DifferentTerm, _Command}} ->
             false
     end.
 
