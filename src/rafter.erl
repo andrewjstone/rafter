@@ -3,10 +3,10 @@
 -include("rafter.hrl").
 
 %% API
--export([start/0]).
+-export([start_cluster/0]).
 
 %% @doc Only use this during testing
-start() ->
+start_cluster() ->
     application:start(lager),
     application:start(rafter),
     rafter_sup:start_cluster().
