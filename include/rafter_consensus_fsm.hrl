@@ -1,9 +1,15 @@
+-record(client_req, {
+    id   :: binary(),
+    timer :: timer:tref(),
+    from :: term(),
+    index :: non_neg_integer(),
+    term :: non_neg_integer()}).
+
 -record(state, {
     leader :: term(),
     term = 0 :: non_neg_integer(),
     voted_for :: term(),
-    last_log_term :: non_neg_integer(),
-    last_log_index :: non_neg_integer(),
+    commit_index = 0 :: non_neg_integer(),
 
     %% The last time a timer was created
     timer_start :: non_neg_integer(),
@@ -17,12 +23,14 @@
     %% Responses from RPCs to other servers
     responses = dict:new() :: dict(),
 
+    %% Outstanding Client Requests
+    client_reqs = [] :: [#client_req{}],
+
     %% All servers making up the ensemble
     me :: string(),
     peers :: list(string()),
-
-    %% Different Transports can be plugged in (erlang messaging, tcp, udp, etc...)
-    %% To get this thing implemented quickly, erlang messaging is hardcoded for now
-    transport = erlang :: erlang}).
-
+    
+    %% We allow pluggable state machine backends.
+    %% For now hardcode it with an example
+    state_machine=rafter_sm_echo}).
 

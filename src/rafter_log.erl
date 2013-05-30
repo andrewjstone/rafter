@@ -104,8 +104,10 @@ format_status(_, [_, State]) ->
     Data = lager:pr(State, ?MODULE),
     [{data, [{"StateData", Data}]}].
 
-handle_call({append, NewEntries}, _From, #state{entries=Entries}=State) ->
-    {reply, ok, State#state{entries=NewEntries++Entries}};
+handle_call({append, NewEntries}, _From, #state{entries=OldEntries}=State) ->
+    Entries = NewEntries ++ OldEntries,
+    Index = length(Entries),
+    {reply, {ok, Index}, State#state{entries=Entries}};
 handle_call(get_last_entry, _From, #state{entries=[]}=State) ->
     {reply, {ok, not_found}, State};
 handle_call(get_last_entry, _From, #state{entries=[H | _T]}=State) ->

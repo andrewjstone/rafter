@@ -5,6 +5,7 @@
 -include("rafter.hrl").
 -include("rafter_consensus_fsm.hrl").
 
+-define(CLIENT_TIMEOUT, 2000).
 -define(ELECTION_TIMEOUT_MIN, 150).
 -define(ELECTION_TIMEOUT_MAX, 300).
 -define(HEARTBEAT_TIMEOUT, 75).
@@ -13,8 +14,8 @@
 -define(timeout(), timeout(State#state.timer_start, State#state.timer_duration)).
 
 %% API
--export([start/0, stop/1, start/2, start_link/2, send/2, send_sync/2,
-         leader/1]).
+-export([start/0, stop/1, start/2, start_link/2, leader/1, append/2,
+         send/2, send_sync/2]).
 
 %% gen_fsm callbacks
 -export([init/1, code_change/4, handle_event/3, handle_info/3,
@@ -43,6 +44,9 @@ start_link(Me, Peers) ->
 
 leader(Peer) ->
     gen_fsm:sync_send_all_state_event(Peer, get_leader, 100).
+
+append(Peer, Command) ->
+    gen_fsm:sync_send_event(Peer, {append, Command}).
 
 -spec send(atom(), #vote{} | #append_entries_rpy{}) -> ok.
 send(To, Msg) ->
@@ -84,6 +88,15 @@ handle_sync_event(get_leader, _From, StateName, State) ->
 handle_sync_event(_Event, _From, _StateName, State) ->
     {stop, badmsg, State}.
 
+handle_info({client_timeout, Id}, StateName, #state{client_reqs=Reqs}=State) ->
+    case find_client_req(Id, Reqs) of
+        {ok, ClientReq} ->
+            send_client_timeout_reply(ClientReq),
+            NewState = State#state{client_reqs=delete_client_req(Id, Reqs)},
+            {next_state, StateName, NewState, ?timeout()}; 
+        not_found ->
+            {next_state, StateName, State, ?timeout()}
+    end;
 handle_info(_, _, State) ->
     {stop, badmsg, State}.
 
@@ -96,7 +109,7 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%=============================================================================
 %% States
 %%
-%% Note: All RPC's requests get answered in State/3 functions.
+%% Note: All RPC's and client requests get answered in State/3 functions.
 %% RPC Responses get handled in State/2 functions.
 %%=============================================================================
 
@@ -118,8 +131,9 @@ follower(#append_entries{term=Term}, _From,
          #state{term=CurrentTerm, me=Me}=State) when CurrentTerm > Term ->
     Rpy = #append_entries_rpy{from=Me, term=CurrentTerm, success=false},
     {reply, Rpy, follower, State, ?timeout()};
-follower(#append_entries{term=Term, from=From}=AppendEntries, _From, 
-         #state{me=Me}=State) ->
+follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex, 
+                         entries=Entries}=AppendEntries, _From, 
+                         #state{me=Me}=State) ->
     Duration = election_timeout(),
     State2=set_term(Term, State),
     State3=State2#state{timer_start=os:timestamp(), timer_duration=Duration},
@@ -128,15 +142,19 @@ follower(#append_entries{term=Term, from=From}=AppendEntries, _From,
         false ->
             {reply, Rpy, follower, State3, Duration};
         true ->
-            Log = ?logname(),
-            ok = rafter_log:truncate(Log,
-                                     AppendEntries#append_entries.prev_log_index),
-            ok = rafter_log:append(Log, AppendEntries#append_entries.entries),
-            %% apply_committed_entries(AppendEntries, State3),
-            NewRpy = Rpy#append_entries_rpy{success=true},
+            ok = rafter_log:truncate(?logname(), PrevLogIndex),
+            {ok, CurrentIndex}  = rafter_log:append(?logname(), Entries),
+            NewRpy = Rpy#append_entries_rpy{success=true, index=CurrentIndex},
             State4 = State3#state{leader=From},
             {reply, NewRpy, follower, State4, Duration}
-    end.
+    end;
+
+%% Handle append requests from users. Transparently redirect to leader.
+follower({append, _Command}, _From, #state{leader=undefined}=State) ->
+    {reply, {error, election_in_progress}, follower, State, ?timeout()};
+follower({append, _Command}, _From, #state{leader=Leader}=State) ->
+    Reply = {error, {redirect, Leader}},
+    {reply, Reply, follower, State, ?timeout()}.
 
 %% The election timeout has elapsed so start an election
 candidate(timeout, #state{term=CurrentTerm, me=Me}=State) ->
@@ -195,7 +213,12 @@ candidate(#append_entries{term=RequestTerm}, _From, #state{term=CurrentTerm}=Sta
     NewState = step_down(RequestTerm, State),
     {next_state, follower, NewState, NewState#state.timer_duration};
 candidate(#append_entries{}, _From, State) ->
-    {next_state, candidate, State, ?timeout()}.
+    {next_state, candidate, State, ?timeout()};
+
+%% We are in the middle of an election. 
+%% Leader should always be undefined here.
+candidate({append, _Command}, _From, #state{leader=undefined}=State) ->
+    {reply, {error, election_in_progress}, candidate, State, ?timeout()}.
 
 leader(timeout, State) ->
     Duration = heartbeat_timeout(),
@@ -229,16 +252,22 @@ leader(#append_entries_rpy{term=Term, success=true},
     {next_state, leader, State, ?timeout()};
 
 %% Success!
-leader(#append_entries_rpy{from=From, success=true}, 
-       #state{followers=Followers}=State) ->
-       %% TODO: Check to see if this is the latest log index and
-       %%       commit if quorum reached.
-
-       NextIndex = increment_follower_index(From, Followers),
-       NewState = State#state{followers=dict:store(From, NextIndex, Followers)},
-       LastLogIndex = rafter_log:get_last_index(?logname()),
-       maybe_send_entry(From, NextIndex, LastLogIndex, NewState),
-       {next_state, leader, NewState, ?timeout()};
+leader(#append_entries_rpy{from=From, success=true, index=Index},
+       #state{followers=Followers, responses=Responses}=State) ->
+    case save_responses(dict:find(From, Responses), Index, Responses, From) of
+        %% Duplicate Index Received 
+        Responses ->
+            {next_state, leader, State, ?timeout()};
+        NewResponses ->
+            State2 = commit(NewResponses, State),
+            NextIndex = increment_follower_index(From, Followers),
+            State3 = State2#state{
+                followers=dict:store(From, NextIndex, Followers),
+                responses=NewResponses},
+            LastLogIndex = rafter_log:get_last_index(?logname()),
+            maybe_send_entry(From, NextIndex, LastLogIndex, State3),
+            {next_state, leader, State3, ?timeout()}
+    end;
 
 %% Ignore stale votes.
 leader(#vote{}, State) ->
@@ -269,19 +298,130 @@ leader(#request_vote{term=Term}, _From, #state{term=CurrentTerm}=State)
 %% An out of date candidate is trying to steal our leadership role. Stop it.
 leader(#request_vote{}, _From, #state{me=Me, term=CurrentTerm}=State) ->
     Rpy = #vote{from=Me, term=CurrentTerm, success=false},
-    {reply, Rpy, leader, State, ?timeout()}.
+    {reply, Rpy, leader, State, ?timeout()};
 
+%% This is a client request
+leader({append, {Id, Command }}, From, 
+        #state{term=Term, me=Me, client_reqs=ClientRequests}=State) ->
+    Entry = #rafter_entry{term=Term, cmd=Command},
+    {ok, Index} = rafter_log:append(?logname(), [Entry]),
+    {ok, Timer} = timer:send_after(?CLIENT_TIMEOUT, Me, {client_timeout, Id}),
+    ClientRequest = #client_req{id=Id,
+                                from=From, 
+                                index=Index, 
+                                term=Term, 
+                                timer=Timer},
+    NewState = State#state{client_reqs=[ClientRequest | ClientRequests]},
+
+    %% This is not strictly necessary and only improves latency. 
+    %% We could just wait for the next heartbeat.
+    send_append_entries(State),
+    {next_state, leader, NewState, ?timeout()}.
+    
 %%=============================================================================
 %% Internal Functions 
 %%=============================================================================
 
+send_client_timeout_reply(#client_req{from=From, id=Id}) ->
+    gen_fsm:reply(From, {error, timeout, Id}).
+
+send_client_reply(#client_req{from=From, id=Id}, Result) ->
+    gen_fsm:reply(From, {ok, Result, Id}).
+
+find_client_req(Id, ClientRequests) ->
+    Result = lists:filter(fun(Req) ->
+                              Req#client_req.id =:= Id 
+                          end, ClientRequests),
+    case Result of
+        [Request] ->
+            {ok, Request};
+        [] ->
+            not_found
+    end.
+
+delete_client_req(Id, ClientRequests) ->
+    lists:filter(fun(Req) ->
+                     Req#client_req.id =/= Id 
+                 end, ClientRequests).
+
+find_client_req_by_index(Index, ClientRequests) ->
+    Result = lists:filter(fun(Req) ->
+                              Req#client_req.index =:= Index
+                          end, ClientRequests),
+    case Result of
+        [Request] ->
+            {ok, Request};
+        [] ->
+            not_found
+    end.
+
+delete_client_req_by_index(Index, ClientRequests) ->
+    lists:filter(fun(Req) ->
+                    Req#client_req.index =/= Index
+                 end, ClientRequests).
+                    
+%% @doc Commit entries between the previous commit index and the new one.
+%%      Apply them to the local state machine and respond to any outstanding
+%%      client requests that these commits affect. Return the new state.
+commit_entries(NewCommitIndex, #state{commit_index=CommitIndex, 
+                                      client_reqs=ClientReqs, 
+                                      state_machine=StateMachine}=State) ->
+   NewClientReqs = 
+       lists:foldl(fun(Index, CliReqs) ->
+                   {ok, #rafter_entry{cmd=Command}} = 
+                           rafter_log:get_entry(?logname(), Index),
+                       {ok, Result} = StateMachine:apply(Command),
+                       case find_client_req_by_index(Index, CliReqs) of
+                           {ok, Req} ->
+                               send_client_reply(Req, Result),
+                               delete_client_req_by_index(Index, CliReqs);
+                           not_found ->
+                               CliReqs
+                       end
+                   end, ClientReqs, lists:seq(CommitIndex+1, NewCommitIndex)),
+    State#state{commit_index=NewCommitIndex, client_reqs=NewClientReqs}.
+
+commit(Responses, #state{commit_index=CommitIndex}=State) ->
+    WriteList  = dict:to_list(dict:filter(fun(_, WriteIndex) ->
+                                                WriteIndex > CommitIndex
+                                            end, Responses)),
+    LaterWrites = [V || {_, V} <- WriteList],
+
+    %% The +1 is because we've already written the entry to our log
+    case length(LaterWrites) + 1 >= ?QUORUM of
+        true ->
+            %% TODO: Properly figure out the highest eligible index
+            MinWrite = lists:min(LaterWrites),
+            case safe_to_commit(MinWrite, State) of
+                true ->
+                    commit_entries(MinWrite, State);
+                false ->
+                    State
+            end;
+        false ->
+            State 
+    end.
+
+safe_to_commit(Index, #state{term=CurrentTerm}=State) ->
+    CurrentTerm =:= rafter_log:get_term(?logname(), Index).
+
 %% We are about to transition to the follower state. Reset the necessary state.
 step_down(NewTerm, State) ->
     State#state{term=NewTerm,
+                responses=dict:new(),
                 timer_duration=election_timeout(),
                 timer_start=os:timestamp(),
                 voted_for=undefined,
                 leader=undefined}.
+
+save_responses({ok, LastIndex}, Index, Responses, _From) when LastIndex > Index ->
+    Responses;
+save_responses({ok, Index}, Index, Responses, _From) ->
+    Responses;
+save_responses({ok, _LastIndex}, Index, Responses, From) ->
+    dict:store(From, Index, Responses);
+save_responses(error, Index, Responses, From) ->
+    dict:store(From, Index, Responses).
 
 handle_request_vote(#request_vote{from=CandidateId, term=Term}=RequestVote, State) ->
     State2 = set_term(Term, State),
@@ -318,7 +458,7 @@ send_entry(Peer, Index, #state{me=Me, term=Term}=State) ->
     Entries = case rafter_log:get_entry(Log, Index) of
                   {ok, not_found} -> 
                       [];
-                  Entry -> 
+                  {ok, Entry} -> 
                       [Entry]
               end,
     AppendEntries = #append_entries{term=Term,
@@ -369,6 +509,7 @@ request_votes(#state{peers=Peers, term=Term, me=Me}=State) ->
 become_leader(#state{me=Me}=State) ->
     %% TODO: Commit a noop entry to the log so we can move the commit index
     State#state{leader=Me, 
+                responses=dict:new(),
                 followers=initialize_followers(State),
                 timer_start=os:timestamp()}.
 
@@ -386,9 +527,9 @@ consistency_check(#append_entries{prev_log_index=Index,
     case rafter_log:get_entry(?logname(), Index) of
         {ok, not_found} ->
             false;
-        {ok, {entry, Term, _Command}} ->
+        {ok, #rafter_entry{term=Term}} ->
             true;
-        {ok, {entry, _DifferentTerm, _Command}} ->
+        {ok, #rafter_entry{term=_DifferentTerm}} ->
             false
     end.
 

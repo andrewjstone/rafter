@@ -8,6 +8,10 @@
 
 -behaviour(eqc_statem).
 
+%% eqc_statem exports
+-export([command/1, initial_state/0, next_state/3, postcondition/3,
+         precondition/2]).
+
 -include("rafter.hrl").
 
 -compile(export_all).
@@ -67,7 +71,7 @@ next_state(S, {error, bad_index}, {call, rafter_log, truncate, [_Index]}) ->
 next_state(S, _V, {call, _, _, _}) ->
     S.
     
-postcondition(_S, {call, rafter_log, append, [_Entries]}, _V=ok) ->
+postcondition(_S, {call, rafter_log, append, [_Entries]}, {ok, _Index}) ->
     true;
 postcondition(S, {call, rafter_log, get_last_index, []}, V) ->
     S#state.log_length  =:= V;
@@ -109,7 +113,7 @@ prop_log() ->
 entry() ->
     #rafter_entry{
         term = rafter_gen:non_neg_integer(),
-        command = eqc_gen:binary()}.
+        cmd = eqc_gen:binary()}.
 
 entries() ->
     list(entry()).
