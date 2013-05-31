@@ -1,13 +1,6 @@
 Rafter is an erlang implementation of the [raft consensus protocol](https://ramcloud.stanford.edu/wiki/download/attachments/11370504/raft.pdf) .
 
 
-### starting a node from the repl
-
-    application:start(rafter),
-    Me = peer1,
-    Peers = [peer2, peer3, peer4, peer5],
-    rafter_sup:start_peer(Me, Peers).
-
 ### starting a cluster of 5 nodes on a single vm for testing. Start all dependencies.
 The peers are all simple erlang processes. The consensus fsm's are named peer1..peer5.
 The corresponding log gen_servers are named peer1_log..peer5_log. Other processes are named in a similar fashion.
@@ -22,6 +15,15 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 ### Show the current state of the log for a peer
     
     sys:get_status(peer1_log).
+
+### Append a command to the log. This will be wrapped in a client library soon.
+
+   ```erlang
+   %% Each client message should be unique
+   MsgId = 1,
+   Command = do_something,
+   rafter_consensus_fsm:append(peer3, {MsgId, Command}).
+   ```
 
 ### compiling code
 
