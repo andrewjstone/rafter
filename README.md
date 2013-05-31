@@ -32,3 +32,8 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 ### running tests
 
     ./rebar eunit skip_deps=true
+
+### License
+
+Apache 2.0
+http://www.apache.org/licenses/LICENSE-2.0.html
