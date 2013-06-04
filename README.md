@@ -33,6 +33,21 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 
     ./rebar eunit skip_deps=true
 
+### TODO
+
+ * Allow distributed erlang to be used
+ * Persistent log
+    * write to file
+    * compaction
+      * start with snapshotting assuming data is ```small``` as described in section 2 [here](https://ramcloud.stanford.edu/wiki/download/attachments/12386595/compaction.pdf?version=1&modificationDate=1367123151531)
+ * Client interface
+   * Sequence number for idempotent requests for state machine backends
+   * Redis like text-based interface?
+   * HTTP ?
+ * more statemachine tests with eqc
+ * Anti-Entropy - 
+   * Write AAE info into snapshot file during snapshotting
+
 ### License
 
 Apache 2.0
