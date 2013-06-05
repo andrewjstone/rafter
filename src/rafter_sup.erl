@@ -25,19 +25,23 @@ start_peer(Peer) ->
 %% on each machine with node/local name semantics. 
 %% For testing, this allows us to start 5 nodes in one erlang VM and 
 %% communicate with local names.
-start_peer(Me, Peers) ->
+-spec start_peer(atom() | {atom(), atom()}, [atom()] | [{atom(), atom()}]) -> ok.
+start_peer(Me, Peers) when is_atom(Me) ->
     SupName = consensus_sup(Me),
-    ConsensusSup= {SupName,
-                {rafter_consensus_sup, start_link, [Me, Peers]},
-                permanent, 5000, supervisor, [rafter_consensus_sup]},
-    supervisor:start_child(?MODULE, ConsensusSup).
+    start_child(SupName, Me, Peers);
+start_peer(Me, Peers) ->
+    {Name, _Node} = Me,
+    SupName = consensus_sup(Name),
+    start_child(SupName, Me, Peers).
 
-stop_peer(Peer) ->
+-spec stop_peer(atom() | tuple()) -> ok.
+stop_peer(Peer) when is_atom(Peer) ->
     ChildId = consensus_sup(Peer),
-    supervisor:terminate_child(?MODULE, ChildId),
-    %% A big meh to OTP supervisor child handling. Just delete so start works
-    %% again.
-    supervisor:delete_child(?MODULE, ChildId).
+    stop_child(ChildId);
+stop_peer(Peer) ->
+    {Name, _Node} = Peer,
+    SupName = consensus_sup(Name),
+    stop_child(SupName).
 
 %% @doc Start a local cluster of peers with names peer[1-5] 
 start_cluster() ->
@@ -56,3 +60,15 @@ init([]) ->
 %% ===================================================================
 consensus_sup(Peer) ->
     list_to_atom(atom_to_list(Peer) ++ "_consensus_sup").
+
+start_child(SupName, Me, Peers) ->
+    ConsensusSup= {SupName,
+        {rafter_consensus_sup, start_link, [Me, Peers]},
+        permanent, 5000, supervisor, [rafter_consensus_sup]},
+    supervisor:start_child(?MODULE, ConsensusSup).
+
+stop_child(ChildId) ->
+    supervisor:terminate_child(?MODULE, ChildId),
+    %% A big meh to OTP supervisor child handling. Just delete so start works
+    %% again.
+    supervisor:delete_child(?MODULE, ChildId).
