@@ -4,4 +4,5 @@ ebin
 .eunit
 *.beam
 *.swp
+erl_crash.dump
 

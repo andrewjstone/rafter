@@ -14,7 +14,7 @@
 -define(timeout(), timeout(State#state.timer_start, State#state.timer_duration)).
 
 %% API
--export([start/0, stop/1, start/2, start_link/2, leader/1, append/2,
+-export([start/0, stop/1, start/2, start_link/3, leader/1, append/2,
          send/2, send_sync/2]).
 
 %% gen_fsm callbacks
@@ -39,8 +39,8 @@ stop(Pid) ->
 start(Me, Peers) ->
     gen_fsm:start({local, Me}, ?MODULE, [Me, Peers], []).
 
-start_link(Me, Peers) ->
-    gen_fsm:start_link({local, Me}, ?MODULE, [Me, Peers], []).
+start_link(NameAtom, Me, Peers) ->
+    gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, Peers], []).
 
 leader(Peer) ->
     gen_fsm:sync_send_all_state_event(Peer, get_leader, 100).
@@ -149,7 +149,7 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
             {reply, NewRpy, follower, State4, Duration}
     end;
 
-%% Handle append requests from users. Transparently redirect to leader.
+%% Handle append requests from users. Redirect to leader.
 follower({append, _Command}, _From, #state{leader=undefined}=State) ->
     {reply, {error, election_in_progress}, follower, State, ?timeout()};
 follower({append, _Command}, _From, #state{leader=Leader}=State) ->
@@ -591,6 +591,8 @@ successful_vote(CurrentTerm, Me) ->
 fail_vote(CurrentTerm, Me) ->
     {ok, #vote{term=CurrentTerm, success=false, from=Me}}.
 
+logname({Name, _Node}) ->
+    list_to_atom(atom_to_list(Name) ++ "_log");
 logname(Me) ->
     list_to_atom(atom_to_list(Me) ++ "_log").
 
