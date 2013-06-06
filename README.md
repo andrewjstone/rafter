@@ -35,7 +35,6 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 
 ### TODO
 
- * Allow distributed erlang to be used
  * Persistent log
     * write to file
     * compaction
