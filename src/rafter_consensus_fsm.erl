@@ -149,7 +149,7 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
             {reply, NewRpy, follower, State4, Duration}
     end;
 
-%% Handle append requests from users. Transparently redirect to leader.
+%% Handle append requests from users. Redirect to leader.
 follower({append, _Command}, _From, #state{leader=undefined}=State) ->
     {reply, {error, election_in_progress}, follower, State, ?timeout()};
 follower({append, _Command}, _From, #state{leader=Leader}=State) ->

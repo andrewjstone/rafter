@@ -18,6 +18,6 @@ send(To, From, Msg) ->
                            is_record(Rpy, append_entries_rpy) -> 
                       rafter_consensus_fsm:send(From, Rpy);
                   E ->
-                      E
+                      lager:error("Error sending ~p to To ~p: ~p", [Msg, To, E])
                   end
           end).
