@@ -57,16 +57,19 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 
 ### compiling code
 
-    ./rebar compile
+    make
 
 ### running tests
 
-    ./rebar eunit skip_deps=true
+    make test
 
 ### TODO
 
  * Handle non-deterministic state machines
+    * Don't actually log the commands as the code does now. Just keep track of the last logged index, last logged term and current committed term
  * Handle deterministic state machines
+   * run commits through the follower state machine as well as the leader
+   * Ensure a persistent log
  * Persistent log
     * write to file
     * compaction
