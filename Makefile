@@ -1,3 +1,5 @@
+.PHONY: test
+
 rafter:
 	./rebar compile
 test:

@@ -14,7 +14,7 @@
 -define(timeout(), timeout(State#state.timer_start, State#state.timer_duration)).
 
 %% API
--export([start/0, stop/1, start/2, start_link/3, leader/1, append/2,
+-export([start/0, stop/1, start/2, start_link/4, leader/1, op/2,
          send/2, send_sync/2]).
 
 %% gen_fsm callbacks
@@ -39,14 +39,14 @@ stop(Pid) ->
 start(Me, Peers) ->
     gen_fsm:start({local, Me}, ?MODULE, [Me, Peers], []).
 
-start_link(NameAtom, Me, Peers) ->
-    gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, Peers], []).
+start_link(NameAtom, Me, Peers, StateMachine) ->
+    gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, Peers, StateMachine], []).
 
 leader(Peer) ->
     gen_fsm:sync_send_all_state_event(Peer, get_leader, 100).
 
-append(Peer, Command) ->
-    gen_fsm:sync_send_event(Peer, {append, Command}).
+op(Peer, Command) ->
+    gen_fsm:sync_send_event(Peer, {op, Command}).
 
 -spec send(atom(), #vote{} | #append_entries_rpy{}) -> ok.
 send(To, Msg) ->
@@ -62,7 +62,7 @@ send_sync(To, Msg) ->
 %% gen_fsm callbacks 
 %%=============================================================================
 
-init([Me, Peers]) ->
+init([Me, Peers, StateMachine]) ->
     random:seed(),
     Duration = election_timeout(),
     State = #state{term=0,
@@ -71,7 +71,8 @@ init([Me, Peers]) ->
                    responses=dict:new(),
                    followers=[],
                    timer_start=os:timestamp(),
-                   timer_duration = Duration},
+                   timer_duration = Duration,
+                   state_machine=StateMachine},
     {ok, follower, State, Duration}.
 
 format_status(_, [_, State]) ->
@@ -149,10 +150,10 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
             {reply, NewRpy, follower, State4, Duration}
     end;
 
-%% Handle append requests from users. Redirect to leader.
-follower({append, _Command}, _From, #state{leader=undefined}=State) ->
+%% Redirect clients to leader.
+follower({op, _Command}, _From, #state{leader=undefined}=State) ->
     {reply, {error, election_in_progress}, follower, State, ?timeout()};
-follower({append, _Command}, _From, #state{leader=Leader}=State) ->
+follower({op, _Command}, _From, #state{leader=Leader}=State) ->
     Reply = {error, {redirect, Leader}},
     {reply, Reply, follower, State, ?timeout()}.
 
@@ -217,7 +218,7 @@ candidate(#append_entries{}, _From, State) ->
 
 %% We are in the middle of an election. 
 %% Leader should always be undefined here.
-candidate({append, _Command}, _From, #state{leader=undefined}=State) ->
+candidate({op, _Command}, _From, #state{leader=undefined}=State) ->
     {reply, {error, election_in_progress}, candidate, State, ?timeout()}.
 
 leader(timeout, State) ->
@@ -300,8 +301,8 @@ leader(#request_vote{}, _From, #state{me=Me, term=CurrentTerm}=State) ->
     Rpy = #vote{from=Me, term=CurrentTerm, success=false},
     {reply, Rpy, leader, State, ?timeout()};
 
-%% This is a client request
-leader({append, {Id, Command }}, From, 
+%% Handle client requests
+leader({op, {Id, Command }}, From, 
         #state{term=Term, me=Me, client_reqs=ClientRequests}=State) ->
     Entry = #rafter_entry{term=Term, cmd=Command},
     {ok, Index} = rafter_log:append(?logname(), [Entry]),
