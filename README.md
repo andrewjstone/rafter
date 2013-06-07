@@ -5,8 +5,8 @@ Rafter is meant to be used as a library application on an already created distib
 ### Use cases
 Rafter has two primary use cases that can be provided by the raft consensus protocol:
   
- 1) Distributed Consensus with a replicated log 
- 2) Leader election and operation serialization at the leader only.
+ 1. Distributed Consensus with a replicated log 
+ 2. Leader election and operation serialization at the leader only.
 
 TLDR; If your statemachine is deterministic use a replicated log. If your statemachine is non-deterministic use leader-only mode.
 
