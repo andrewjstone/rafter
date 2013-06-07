@@ -1,3 +1,8 @@
+# UNDER CONSTRUCTION
+
+***Note that Rafter is in the process of being built and some of the things described below may not yet be implemented.***
+
+# Introduction
 Rafter is more than just an erlang implementation of the [raft consensus protocol](https://ramcloud.stanford.edu/wiki/download/attachments/11370504/raft.pdf). It aims to take the pain away from building Consistent(2F+1 CP) distributed systems, as well as act as a library for leader election and routing. A main goal is to keep a very small user api that automatically handles the problems of the everyday Erlang distributed systems developer. It is hopefully your ***libPaxos.dll*** for erlang.
 
 Rafter is meant to be used as a library application on an already created distibuted erlang cluster of 3 or 5 nodes. rafter peers are uniquely identified by ```{Name, Node}``` tuples which get passed in as static configuration. 
@@ -60,6 +65,8 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 
 ### TODO
 
+ * Handle non-deterministic state machines
+ * Handle deterministic state machines
  * Persistent log
     * write to file
     * compaction
