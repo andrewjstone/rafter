@@ -3,7 +3,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, start_peer/2, start_peer/1, start_cluster/0, stop_peer/1]).
+-export([start_link/0, start_peer/3, start_peer/1, start_cluster/0, stop_peer/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -19,20 +19,21 @@ start_link() ->
 %%      repl/tests for testing the peer1..peer5 cluster.
 start_peer(Peer) ->
     Peers = lists:delete(Peer, [peer1, peer2, peer3, peer4, peer5]),
-    start_peer(Peer, Peers).
+    start_peer(Peer, Peers, rafter_sm_echo).
 
 %% @doc Start an individual peer. In production, this will only be called once 
 %% on each machine with node/local name semantics. 
 %% For testing, this allows us to start 5 nodes in one erlang VM and 
 %% communicate with local names.
--spec start_peer(atom() | {atom(), atom()}, [atom()] | [{atom(), atom()}]) -> ok.
-start_peer(Me, Peers) when is_atom(Me) ->
+-spec start_peer(atom() | {atom(), atom()}, [atom()] | [{atom(), atom()}], 
+                 atom()) -> ok.
+start_peer(Me, Peers, StateMachineModule) when is_atom(Me) ->
     SupName = consensus_sup(Me),
-    start_child(SupName, Me, Peers);
-start_peer(Me, Peers) ->
+    start_child(SupName, Me, Peers, StateMachineModule);
+start_peer(Me, Peers, StateMachineModule) ->
     {Name, _Node} = Me,
     SupName = consensus_sup(Name),
-    start_child(SupName, Me, Peers).
+    start_child(SupName, Me, Peers, StateMachineModule).
 
 -spec stop_peer(atom() | tuple()) -> ok.
 stop_peer(Peer) when is_atom(Peer) ->
@@ -46,7 +47,7 @@ stop_peer(Peer) ->
 %% @doc Start a local cluster of peers with names peer[1-5] 
 start_cluster() ->
     Peers = [peer1, peer2, peer3, peer4, peer5],
-    [start_peer(Me, lists:delete(Me, Peers)) || Me <- Peers].
+    [start_peer(Me, lists:delete(Me, Peers), rafter_sm_echo) || Me <- Peers].
 
 %% ===================================================================
 %% Supervisor callbacks
@@ -61,9 +62,9 @@ init([]) ->
 consensus_sup(Peer) ->
     list_to_atom(atom_to_list(Peer) ++ "_consensus_sup").
 
-start_child(SupName, Me, Peers) ->
+start_child(SupName, Me, Peers, StateMachineModule) ->
     ConsensusSup= {SupName,
-        {rafter_consensus_sup, start_link, [Me, Peers]},
+        {rafter_consensus_sup, start_link, [Me, Peers, StateMachineModule]},
         permanent, 5000, supervisor, [rafter_consensus_sup]},
     supervisor:start_child(?MODULE, ConsensusSup).
 

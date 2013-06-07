@@ -30,7 +30,6 @@
     me :: string(),
     peers :: list(string()),
     
-    %% We allow pluggable state machine backends.
-    %% For now hardcode it with an example
-    state_machine=rafter_sm_echo}).
+    %% We allow pluggable state machine modules.
+    state_machine :: atom()}).
 
