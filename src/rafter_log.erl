@@ -8,7 +8,8 @@
 -export([start/0, stop/0, start_link/1, append/1, append/2, 
         get_last_entry/0, get_last_entry/1, get_entry/1, get_entry/2,
         get_term/1, get_term/2, get_last_index/0, get_last_index/1, 
-        get_last_term/0, get_last_term/1, truncate/1, truncate/2]).
+        get_last_term/0, get_last_term/1, truncate/1, truncate/2,
+        get_voted_for/1, set_voted_for/2, get_current_term/1, set_current_term/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -66,6 +67,18 @@ get_last_term(Name) ->
             0
     end.
 
+set_voted_for(Name, VotedFor) ->
+    gen_server:call(Name, {set_voted_for, VotedFor}).
+
+get_voted_for(Name) ->
+    gen_server:call(Name, get_voted_for).
+
+set_current_term(Name, CurrentTerm) ->
+    gen_server:call(Name, {set_current_term, CurrentTerm}).
+
+get_current_term(Name) ->
+    gen_server:call(Name, get_current_term).
+
 get_entry(Index) ->
     gen_server:call(?MODULE, {get_entry, Index}).
 
@@ -108,12 +121,24 @@ handle_call({append, NewEntries}, _From, #state{entries=OldEntries}=State) ->
     Entries = NewEntries ++ OldEntries,
     Index = length(Entries),
     {reply, {ok, Index}, State#state{entries=Entries}};
+
 handle_call(get_last_entry, _From, #state{entries=[]}=State) ->
     {reply, {ok, not_found}, State};
 handle_call(get_last_entry, _From, #state{entries=[H | _T]}=State) ->
     {reply, {ok, H}, State};
 handle_call(get_last_index, _From, #state{entries=Entries}=State) ->
     {reply, length(Entries), State};
+
+handle_call({set_voted_for, VotedFor}, _From, State) ->
+    {reply, ok, State#state{voted_for=VotedFor}};
+handle_call(get_voted_for, _From, #state{voted_for=VotedFor}=State) ->
+    {reply, {ok, VotedFor}, State};
+
+handle_call({set_current_term, Term}, _From, State) ->
+    {reply, ok, State#state{current_term=Term}};
+handle_call(get_current_term, _From, #state{current_term=Term}=State) ->
+    {reply, {ok, Term}, State};
+
 handle_call({get_entry, Index}, _From, #state{entries=Entries}=State) ->
     Entry = try 
         lists:nth(Index, lists:reverse(Entries))
@@ -121,6 +146,7 @@ handle_call({get_entry, Index}, _From, #state{entries=Entries}=State) ->
         not_found
     end, 
     {reply, {ok, Entry}, State};
+
 handle_call({truncate, 0}, _From, #state{entries=[]}=State) ->
     {reply, ok, State};
 handle_call({truncate, Index}, _From, #state{entries=Entries}=State) 

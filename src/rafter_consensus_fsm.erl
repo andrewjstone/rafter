@@ -134,7 +134,7 @@ follower(#append_entries{term=Term}, _From,
     {reply, Rpy, follower, State, ?timeout()};
 follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex, 
                          entries=Entries}=AppendEntries, _From, 
-                         #state{me=Me}=State) ->
+         #state{me=Me}=State) ->
     Duration = election_timeout(),
     State2=set_term(Term, State),
     State3=State2#state{timer_start=os:timestamp(), timer_duration=Duration},
@@ -160,12 +160,15 @@ follower({op, _Command}, _From, #state{leader=Leader}=State) ->
 %% The election timeout has elapsed so start an election
 candidate(timeout, #state{term=CurrentTerm, me=Me}=State) ->
     Duration = election_timeout(),
-    NewState = State#state{term = CurrentTerm + 1,
+    NewTerm = CurrentTerm + 1,
+    NewState = State#state{term = NewTerm,
                            responses = dict:new(),
                            timer_duration = Duration,
                            timer_start=os:timestamp(),
                            leader=undefined,
                            voted_for=Me},
+    ok = rafter_log:set_current_term(?logname(), NewTerm),
+    ok = rafter_log:set_voted_for(?logname(), Me),
     request_votes(NewState),
     {next_state, candidate, NewState, Duration};
 
@@ -230,13 +233,8 @@ leader(timeout, State) ->
 %% We are out of date. Go back to follower state.
 leader(#append_entries_rpy{term=Term, success=false}, 
        #state{term=CurrentTerm}=State) when Term > CurrentTerm ->
-    Duration = election_timeout(),
-    NewState = State#state{term=Term,
-                           responses=dict:new(),
-                           voted_for=undefined,
-                           timer_duration=Duration,
-                           timer_start=os:timestamp()},
-    {next_state, follower, NewState, Duration};
+    NewState = step_down(Term, State),
+    {next_state, follower, NewState, NewState#state.timer_duration};
 
 %% The follower is not synced yet. Try the previous entry
 leader(#append_entries_rpy{from=From, success=false}, 
@@ -283,12 +281,8 @@ leader(#append_entries{term=Term}, _From, #state{term=CurrentTerm, me=Me}=State)
 %% We are out of date. Step down
 leader(#append_entries{term=Term}, _From, #state{term=CurrentTerm}=State) 
         when Term > CurrentTerm ->
-        Duration = election_timeout(),
-        {next_state, follower, State#state{term=Term, 
-                                   responses=dict:new(),
-                                   voted_for=undefined,
-                                   timer_duration=Duration,
-                                   timer_start=os:timestamp()}, Duration};
+    NewState = step_down(Term, State),
+    {next_state, follower, NewState, NewState#state.timer_duration};
 
 %% We are out of date. Step down
 leader(#request_vote{term=Term}, _From, #state{term=CurrentTerm}=State)
@@ -369,7 +363,7 @@ commit_entries(NewCommitIndex, #state{commit_index=CommitIndex,
                                       state_machine=StateMachine}=State) ->
    NewClientReqs = 
        lists:foldl(fun(Index, CliReqs) ->
-                   {ok, #rafter_entry{cmd=Command}} = 
+                       {ok, #rafter_entry{cmd=Command}} = 
                            rafter_log:get_entry(?logname(), Index),
                        {ok, Result} = StateMachine:apply(Command),
                        case find_client_req_by_index(Index, CliReqs) of
@@ -408,6 +402,8 @@ safe_to_commit(Index, #state{term=CurrentTerm}=State) ->
 
 %% We are about to transition to the follower state. Reset the necessary state.
 step_down(NewTerm, State) ->
+    ok = rafter_log:set_voted_for(?logname(), undefined),
+    ok = rafter_log:set_term(?logname(), NewTerm),
     State#state{term=NewTerm,
                 responses=dict:new(),
                 timer_duration=election_timeout(),
@@ -430,6 +426,7 @@ handle_request_vote(#request_vote{from=CandidateId, term=Term}=RequestVote, Stat
     %% TODO:  rafter_log:write(NewState),
     case Vote#vote.success of
         true ->
+            ok = rafter_log:set_voted_for(?logname(), CandidateId),
             Duration = election_timeout(),
             State3 = State2#state{voted_for=CandidateId, 
                                   timer_duration=Duration, 
@@ -537,6 +534,8 @@ consistency_check(#append_entries{prev_log_index=Index,
 set_term(Term, #state{term=CurrentTerm}=State) when Term < CurrentTerm ->
     State;
 set_term(Term, #state{term=CurrentTerm}=State) when Term > CurrentTerm ->
+    ok = rafter_log:set_current_term(?logname(), CurrentTerm),
+    ok = rafter_log:set_voted_for(?logname(), undefined),
     State#state{term=Term, voted_for=undefined};
 set_term(Term, #state{term=Term}=State) ->
     State.
