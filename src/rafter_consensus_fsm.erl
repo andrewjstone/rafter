@@ -403,7 +403,7 @@ safe_to_commit(Index, #state{term=CurrentTerm}=State) ->
 %% We are about to transition to the follower state. Reset the necessary state.
 step_down(NewTerm, State) ->
     ok = rafter_log:set_voted_for(?logname(), undefined),
-    ok = rafter_log:set_term(?logname(), NewTerm),
+    ok = rafter_log:set_current_term(?logname(), NewTerm),
     State#state{term=NewTerm,
                 responses=dict:new(),
                 timer_duration=election_timeout(),
