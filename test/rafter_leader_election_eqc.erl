@@ -46,7 +46,7 @@ cleanup(_) ->
 
 prop_leader_elected() ->
     application:start(rafter),
-    rafter_sup:start_cluster(),
+    rafter_sup:start_cluster(rafter_sm_echo),
     %% leader election should occur in less than 1 second with the defaults. 
     %% This is a liveness constraint I'd like to maintain if possible.
     timer:sleep(1000),
