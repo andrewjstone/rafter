@@ -3,7 +3,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, start_peer/3, start_peer/1, start_cluster/0, stop_peer/1]).
+-export([start_link/0, start_peer/3, start_peer/1, start_cluster/1, stop_peer/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -45,9 +45,9 @@ stop_peer(Peer) ->
     stop_child(SupName).
 
 %% @doc Start a local cluster of peers with names peer[1-5] 
-start_cluster() ->
+start_cluster(StateMachine) ->
     Peers = [peer1, peer2, peer3, peer4, peer5],
-    [start_peer(Me, lists:delete(Me, Peers), rafter_sm_echo) || Me <- Peers].
+    [start_peer(Me, lists:delete(Me, Peers), StateMachine) || Me <- Peers].
 
 %% ===================================================================
 %% Supervisor callbacks

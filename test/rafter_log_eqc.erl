@@ -90,7 +90,6 @@ postcondition(S, {call, rafter_log, truncate, [Index]}, {error, bad_index}) ->
 postcondition(S, {call, rafter_log, truncate, [Index]}, ok) ->
     S#state.log_length >= Index.
 
-
 %% ====================================================================
 %% EQC Properties
 %% ====================================================================

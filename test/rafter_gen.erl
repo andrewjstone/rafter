@@ -37,4 +37,7 @@ consistent_terms() ->
               {non_neg_integer(), non_neg_integer()},
               CurrentTerm >= LastLogTerm).
 
+uuid() ->
+    druuid:v4().
+
 -endif.

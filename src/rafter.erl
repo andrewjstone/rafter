@@ -33,7 +33,10 @@ start_node(Me, Peers) ->
 start_cluster() ->
     application:start(lager),
     application:start(rafter),
-    rafter_sup:start_cluster().
+    start_cluster(rafter_sm_echo).
+
+start_cluster(StateMachine) ->
+    rafter_sup:start_cluster(StateMachine).
 
 start_test_node(Name) ->
     application:start(lager),
