@@ -12,12 +12,6 @@ start_node(Me, Peers, StateMachineModule) ->
     rafter_sup:start_peer(Me, Peers, StateMachineModule).
 
 %% @doc Run an operation on the backend statemachine. 
-%%      Allow skipping persistent logging and replication when that state machine
-%%      only requires the operation to run on the leader. This is useful when
-%%      the backend statemachine is non-deterministic(i.e. it may return an error).
-%%      An example of non-determinism is writing to a database or file system.
-%%      because disks and networks can fail.
-%%
 %% Note: Peer is just the local node in production. The request will 
 %% automatically be routed to the leader.
 op(Peer, Command) ->
