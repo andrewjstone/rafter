@@ -427,6 +427,7 @@ handle_request_vote(#request_vote{from=CandidateId, term=Term}=RequestVote, Stat
     case Vote#vote.success of
         true ->
             ok = rafter_log:set_voted_for(?logname(), CandidateId),
+            ok = rafter_log:set_current_term(?logname(), State2#state.term),
             Duration = election_timeout(),
             State3 = State2#state{voted_for=CandidateId, 
                                   timer_duration=Duration, 
