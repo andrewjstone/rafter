@@ -52,7 +52,6 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 ### TODO
 
  * Handle deterministic state machines
-   * run commits through the follower state machine as well as the leader
    * Ensure a persistent log
  * Persistent log
     * write to file

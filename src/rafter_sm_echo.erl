@@ -7,6 +7,7 @@
 %% This state machine simply echoes the input, and is
 %% the simplest possible deterministic state machine example.
 apply(Command) ->
+    io:format("applying ~p from ~p", [Command, self()]),
     {ok, Command}.
 
 -spec is_deterministic() -> boolean().

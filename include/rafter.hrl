@@ -16,7 +16,7 @@
             prev_log_index :: non_neg_integer(),
             prev_log_term :: non_neg_integer(),
             entries :: term(),
-            commitIndex :: non_neg_integer()}).
+            commit_index :: non_neg_integer()}).
 
 -record(append_entries_rpy, {
             from :: atom(),

@@ -133,8 +133,8 @@ follower(#append_entries{term=Term}, _From,
     Rpy = #append_entries_rpy{from=Me, term=CurrentTerm, success=false},
     {reply, Rpy, follower, State, ?timeout()};
 follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex, 
-                         entries=Entries}=AppendEntries, _From, 
-         #state{me=Me}=State) ->
+                         entries=Entries, commit_index=CommitIndex}=AppendEntries,
+         _From, #state{me=Me}=State) ->
     Duration = election_timeout(),
     State2=set_term(Term, State),
     State3=State2#state{timer_start=os:timestamp(), timer_duration=Duration},
@@ -146,8 +146,9 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
             ok = rafter_log:truncate(?logname(), PrevLogIndex),
             {ok, CurrentIndex}  = rafter_log:append(?logname(), Entries),
             NewRpy = Rpy#append_entries_rpy{success=true, index=CurrentIndex},
-            State4 = State3#state{leader=From},
-            {reply, NewRpy, follower, State4, Duration}
+            State4 = commit_entries(CommitIndex, State3),
+            State5 = State4#state{leader=From},
+            {reply, NewRpy, follower, State5, Duration}
     end;
 
 %% Redirect clients to leader.
@@ -444,7 +445,7 @@ maybe_send_entry(Peer, Index, LastLogIndex, State)
         when LastLogIndex >= Index ->
     send_entry(Peer, Index, State).
 
-send_entry(Peer, Index, #state{me=Me, term=Term}=State) ->
+send_entry(Peer, Index, #state{me=Me, term=Term, commit_index=CIdx}=State) ->
     Log = ?logname(),
     {PrevLogIndex, PrevLogTerm} = 
         case Index - 1 of
@@ -464,7 +465,8 @@ send_entry(Peer, Index, #state{me=Me, term=Term}=State) ->
                                     from=Me,
                                     prev_log_index=PrevLogIndex,
                                     prev_log_term=PrevLogTerm,
-                                    entries=Entries},
+                                    entries=Entries,
+                                    commit_index=CIdx},
     rafter_requester:send(Peer, AppendEntries).
 
 send_append_entries(#state{followers=Followers}=State) ->
