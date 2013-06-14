@@ -38,7 +38,7 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
    %% Each client message should be unique
    MsgId = 1,
    Command = do_something,
-   rafter_consensus_fsm:append(peer3, {MsgId, Command}).
+   rafter:op(peer3, {MsgId, Command}).
    ```
 
 ### compiling code
