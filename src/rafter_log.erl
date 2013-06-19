@@ -9,7 +9,8 @@
         get_last_entry/0, get_last_entry/1, get_entry/1, get_entry/2,
         get_term/1, get_term/2, get_last_index/0, get_last_index/1, 
         get_last_term/0, get_last_term/1, truncate/1, truncate/2,
-        get_voted_for/1, set_voted_for/2, get_current_term/1, set_current_term/2]).
+        get_voted_for/1, set_voted_for/2, get_current_term/1, set_current_term/2,
+        name/1, get_config/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -17,6 +18,7 @@
 
 %% TODO: Make this a persistent log (bitcask?)
 -record(state, {
+    config :: #config{},
     entries = [] :: [#rafter_entry{}],
     current_term = 0 :: non_neg_integer(),
     voted_for :: term()}).
@@ -24,6 +26,11 @@
 %%====================================================================
 %% API
 %%====================================================================
+name(Name ++ "_" ++ _) ->
+    name(Name);
+name(Name) ->
+    Name ++ "_log".
+
 start() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
@@ -38,6 +45,12 @@ append(Entries) ->
 
 append(Name, Entries) ->
     gen_server:call(Name, {append, Entries}).
+
+get_config(Name) ->
+    gen_server:call(Name, get_config).
+
+set_config(Name, NewConfig) ->
+    gen_server:call(Name, {set_config, NewConfig}).
 
 get_last_index() ->
     gen_server:call(?MODULE, get_last_index).
@@ -111,7 +124,10 @@ truncate(Name, Index) ->
 %% gen_server callbacks
 %%====================================================================
 init([]) ->
-    {ok, #state{entries = []}}.
+    {ok, #state{entries = [],
+                config=#config{state=blank, 
+                               oldservers=[], 
+                               newservers=[]}}}.
 
 format_status(_, [_, State]) ->
     Data = lager:pr(State, ?MODULE),
@@ -122,10 +138,18 @@ handle_call({append, NewEntries}, _From, #state{entries=OldEntries}=State) ->
     Index = length(Entries),
     {reply, {ok, Index}, State#state{entries=Entries}};
 
+handle_call(get_config, _From, #state{config=Config}=State) ->
+    {reply, Config, State};
+
+handle_call({set_config, NewConfig}, _From, State) ->
+    NewState = State#state{config=NewConfig},
+    {reply, ok, NewState};
+
 handle_call(get_last_entry, _From, #state{entries=[]}=State) ->
     {reply, {ok, not_found}, State};
 handle_call(get_last_entry, _From, #state{entries=[H | _T]}=State) ->
     {reply, {ok, H}, State};
+
 handle_call(get_last_index, _From, #state{entries=Entries}=State) ->
     {reply, length(Entries), State};
 

@@ -35,3 +35,23 @@
         version=0 :: non_neg_integer(),
         term :: non_neg_integer(),
         cmd :: binary()}).
+
+-record(config, {
+    state :: 
+        %% The configuration specifies no servers. Servers that are new to the
+        %% cluster and have empty logs start in this state.
+        blank   | 
+        %% The configuration specifies a single list of servers: a quorum
+        %% requires any majority of oldservers.
+        stable  | 
+        %% The configuration specifies two lists of servers: a quorum requires
+        %% any majority of oldservers, but the newservers also receive log entries.
+        staging | 
+        %% The configuration specifies two lists of servers: a quorum requires
+        %% any majority of oldservers and any majority of the newservers.
+        transitional,
+
+    oldservers :: list(),
+    newservers :: list()
+}).
+

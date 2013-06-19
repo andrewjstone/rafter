@@ -9,7 +9,6 @@
 -define(ELECTION_TIMEOUT_MIN, 150).
 -define(ELECTION_TIMEOUT_MAX, 300).
 -define(HEARTBEAT_TIMEOUT, 75).
--define(QUORUM, 3).
 -define(logname(), logname(State#state.me)).
 -define(timeout(), timeout(State#state.timer_start, State#state.timer_duration)).
 
@@ -190,9 +189,10 @@ candidate(#vote{success=false, from=From}, #state{responses=Responses}=State) ->
     {next_state, candidate, NewState, ?timeout()};
 
 %% Sweet, someone likes us! Do we have enough votes to get elected?
-candidate(#vote{success=true, from=From}, #state{responses=Responses}=State) ->
+candidate(#vote{success=true, from=From}, #state{responses=Responses,
+                                                 config=Config}=State) ->
     NewResponses = dict:store(From, true, Responses),
-    case is_leader(NewResponses) of
+    case rafter_config:quorum(Config, NewResponses) of
         true ->
             NewState = become_leader(State),
             {next_state, leader, NewState, 0};
@@ -377,25 +377,13 @@ commit_entries(NewCommitIndex, #state{commit_index=CommitIndex,
                    end, ClientReqs, lists:seq(CommitIndex+1, NewCommitIndex)),
     State#state{commit_index=NewCommitIndex, client_reqs=NewClientReqs}.
 
-commit(Responses, #state{commit_index=CommitIndex}=State) ->
-    WriteList  = dict:to_list(dict:filter(fun(_, WriteIndex) ->
-                                                WriteIndex > CommitIndex
-                                            end, Responses)),
-    LaterWrites = [V || {_, V} <- WriteList],
-
-    %% The +1 is because we've already written the entry to our log
-    case length(LaterWrites) + 1 >= ?QUORUM of
+commit(Responses, #state{commit_index=CommitIndex, config=Config}=State) ->
+    Min = quorum_min(Config, dict:to_list(Responses),
+    case Min > CommitIndex andalso safe_to_commit(Min, State) of
         true ->
-            %% TODO: Properly figure out the highest eligible index
-            MinWrite = lists:min(LaterWrites),
-            case safe_to_commit(MinWrite, State) of
-                true ->
-                    commit_entries(MinWrite, State);
-                false ->
-                    State
-            end;
+            commit_entries(Min, State);
         false ->
-            State 
+            State
     end.
 
 safe_to_commit(Index, #state{term=CurrentTerm}=State) ->
@@ -483,16 +471,6 @@ decrement_follower_index(From, Followers) ->
         {ok, Num} ->
             Num - 1
     end.
-
-%% @doc Inspect the votes to see if we have a quorum.
--spec is_leader(dict()) -> boolean().
-is_leader(Responses) ->
-    SuccessfulVotes = dict:filter(fun(_, V) ->
-                                      V =:= true
-                                  end, Responses),
-    %% The +1 is because we voted for ourselves, but don't actually send or handle
-    %% the messages. TODO: actually write our vote out to the log at some point.
-    dict:size(SuccessfulVotes) + 1 >= ?QUORUM.
 
 %% @doc Start a process to send a syncrhonous rpc to each peer. Votes will be sent 
 %%      back as messages when the process receives them from the peer. If
