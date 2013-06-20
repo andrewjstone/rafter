@@ -10,7 +10,7 @@
         get_term/1, get_term/2, get_last_index/0, get_last_index/1, 
         get_last_term/0, get_last_term/1, truncate/1, truncate/2,
         get_voted_for/1, set_voted_for/2, get_current_term/1, set_current_term/2,
-        name/1, get_config/1]).
+        get_config/1, set_config/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -26,11 +26,6 @@
 %%====================================================================
 %% API
 %%====================================================================
-name(Name ++ "_" ++ _) ->
-    name(Name);
-name(Name) ->
-    Name ++ "_log".
-
 start() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 

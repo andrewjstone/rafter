@@ -29,6 +29,8 @@
     %% All servers making up the ensemble
     me :: string(),
     peers :: list(string()),
+
+    config :: term(),
     
     %% We allow pluggable state machine modules.
     state_machine :: atom()}).

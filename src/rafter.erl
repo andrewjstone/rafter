@@ -3,7 +3,7 @@
 -include("rafter.hrl").
 
 %% API
--export([start_node/3, op/2]).
+-export([start_node/3, op/2, set_config/2]).
 
 %% Test API
 -export([start_cluster/0, start_node/2, start_test_node/1]).
@@ -17,8 +17,9 @@ start_node(Me, Peers, StateMachineModule) ->
 op(Peer, Command) ->
     rafter_consensus_fsm:op(Peer, Command).
 
-set_config(Config) ->
-    rafter_config:
+set_config(Peer, NewServers) ->
+    Id = druuid:v4(),
+    rafter_consensus_fsm:set_config(Peer, {Id, NewServers}).
 
 %% =============================================
 %% Test Functions

@@ -19,14 +19,14 @@ quorum_min(#config{state=staging, oldservers=OldServers}, Responses) ->
 quorum_min(#config{state=transitional, 
                    oldservers=Old, 
                    newservers=New}, Responses) ->
-    min(quorum_min(OldServers, Responses), quorum_min(New, Responses));
+    min(quorum_min(Old, Responses), quorum_min(New, Responses));
 
 %% Responses doesn't contain the local response so it will be marked as 0. 
 %% We must therefore skip past it in a sorted list so we add 1 to the 
 %% quorum offset.
 quorum_min(Servers, Responses) ->
     Indexes = lists:sort(lists:map(fun(S) -> index(S, Responses) end, Servers)),
-    lists:nth(floor(length(Indexes)/2)+1, Indexes).
+    lists:nth(length(Indexes) div 2 + 1, Indexes).
 
 -spec quorum(#config{} | list(), dict()) -> boolean().
 quorum(#config{state=blank}, _Responses) ->

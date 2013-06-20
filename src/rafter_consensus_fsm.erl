@@ -13,7 +13,7 @@
 -define(timeout(), timeout(State#state.timer_start, State#state.timer_duration)).
 
 %% API
--export([start/0, stop/1, start/2, start_link/4, leader/1, op/2,
+-export([start/0, stop/1, start/2, start_link/4, leader/1, op/2, set_config/2,
          send/2, send_sync/2]).
 
 %% gen_fsm callbacks
@@ -46,6 +46,9 @@ leader(Peer) ->
 
 op(Peer, Command) ->
     gen_fsm:sync_send_event(Peer, {op, Command}).
+
+set_config(Peer, Config) ->
+    gen_fsm:sync_send_event(Peer, {set_config, Config}).
 
 -spec send(atom(), #vote{} | #append_entries_rpy{}) -> ok.
 send(To, Msg) ->
@@ -133,7 +136,7 @@ follower(#append_entries{term=Term}, _From,
     {reply, Rpy, follower, State, ?timeout()};
 follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex, 
                          entries=Entries, commit_index=CommitIndex}=AppendEntries,
-         _From, #state{me=Me}=State) ->
+         _From, #state{me=Me, config=C}=State) ->
     Duration = election_timeout(),
     State2=set_term(Term, State),
     State3=State2#state{timer_start=os:timestamp(), timer_duration=Duration},
@@ -144,9 +147,10 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
         true ->
             ok = rafter_log:truncate(?logname(), PrevLogIndex),
             {ok, CurrentIndex}  = rafter_log:append(?logname(), Entries),
+            Config = maybe_reconfig(C, Entries),
             NewRpy = Rpy#append_entries_rpy{success=true, index=CurrentIndex},
             State4 = commit_entries(CommitIndex, State3),
-            State5 = State4#state{leader=From},
+            State5 = State4#state{leader=From, config=Config},
             {reply, NewRpy, follower, State5, Duration}
     end;
 
@@ -156,6 +160,14 @@ follower({op, _Command}, _From, #state{leader=undefined}=State) ->
 follower({op, _Command}, _From, #state{leader=Leader}=State) ->
     Reply = {error, {redirect, Leader}},
     {reply, Reply, follower, State, ?timeout()}.
+
+maybe_reconfig(CurrentConfig, Entries) ->
+    lists:foldl(fun(#rafter_entry{type=config}=E, _) ->
+                        E;
+                    (_, Config) ->
+                        Config
+                end, CurrentConfig, Entries).
+                  
 
 %% The election timeout has elapsed so start an election
 candidate(timeout, #state{term=CurrentTerm, me=Me}=State) ->
@@ -296,10 +308,45 @@ leader(#request_vote{}, _From, #state{me=Me, term=CurrentTerm}=State) ->
     Rpy = #vote{from=Me, term=CurrentTerm, success=false},
     {reply, Rpy, leader, State, ?timeout()};
 
+leader({set_config, {Id, NewServers}}, From, #state{term=Term, config=C}=State) ->
+    case allow_config(C, NewServers) of
+        true ->
+            Config = reconfig(C, NewServers),
+            Entry = #rafter_entry{type=config, term=Term, cmd=Config},
+            NewState = append(Id, From, Entry, State#state{config=Config}),
+            {next_state, leader, NewState, ?timeout()};
+        false ->
+            {reply, {error, config_in_progress}, leader, State, ?timeout()}
+    end;
+
 %% Handle client requests
 leader({op, {Id, Command }}, From, 
-        #state{term=Term, me=Me, client_reqs=ClientRequests}=State) ->
-    Entry = #rafter_entry{term=Term, cmd=Command},
+        #state{term=Term}=State) ->
+    Entry = #rafter_entry{type=op, term=Term, cmd=Command},
+    NewState = append(Id, From, Entry, State),
+    {next_state, leader, NewState, ?timeout()}.
+    
+%%=============================================================================
+%% Internal Functions 
+%%=============================================================================
+
+-spec reconfig(#config{}, list()) -> #config{}.
+reconfig(#config{state=blank}=Config, Servers) ->
+    Config#config{state=transitional, newservers=Servers};
+reconfig(#config{state=stable}=Config, Servers) ->
+    Config#config{state=transitional, newservers=Servers}.
+
+-spec allow_config(#config{}, list()) -> boolean().
+allow_config(#config{state=blank}, _NewServers) ->
+    true;
+allow_config(#config{state=stable, oldservers=OldServers}, NewServers) 
+    when NewServers =/= OldServers ->
+    true;
+allow_config(_Config, _NewServers) ->
+    false.
+
+-spec append(binary(), term(), #rafter_entry{}, #state{}) -> #state{}.
+append(Id, From, Entry, #state{me=Me, term=Term, client_reqs=Reqs}=State) ->
     {ok, Index} = rafter_log:append(?logname(), [Entry]),
     {ok, Timer} = timer:send_after(?CLIENT_TIMEOUT, Me, {client_timeout, Id}),
     ClientRequest = #client_req{id=Id,
@@ -307,16 +354,12 @@ leader({op, {Id, Command }}, From,
                                 index=Index, 
                                 term=Term, 
                                 timer=Timer},
-    NewState = State#state{client_reqs=[ClientRequest | ClientRequests]},
+    NewState = State#state{client_reqs=[ClientRequest | Reqs]},
 
     %% This is not strictly necessary and only improves latency. 
     %% We could just wait for the next heartbeat.
     send_append_entries(State),
-    {next_state, leader, NewState, ?timeout()}.
-    
-%%=============================================================================
-%% Internal Functions 
-%%=============================================================================
+    NewState.
 
 send_client_timeout_reply(#client_req{from=From, id=Id}) ->
     gen_fsm:reply(From, {error, timeout, Id}).
@@ -359,26 +402,57 @@ delete_client_req_by_index(Index, ClientRequests) ->
 %% @doc Commit entries between the previous commit index and the new one.
 %%      Apply them to the local state machine and respond to any outstanding
 %%      client requests that these commits affect. Return the new state.
+-spec commit_entries(non_neg_integer(), #state{}) -> #state{}.
 commit_entries(NewCommitIndex, #state{commit_index=CommitIndex, 
-                                      client_reqs=ClientReqs, 
-                                      state_machine=StateMachine}=State) ->
-   NewClientReqs = 
-       lists:foldl(fun(Index, CliReqs) ->
-                       {ok, #rafter_entry{cmd=Command}} = 
-                           rafter_log:get_entry(?logname(), Index),
-                       {ok, Result} = StateMachine:apply(Command),
-                       case find_client_req_by_index(Index, CliReqs) of
-                           {ok, Req} ->
-                               send_client_reply(Req, Result),
-                               delete_client_req_by_index(Index, CliReqs);
-                           not_found ->
-                               CliReqs
-                       end
-                   end, ClientReqs, lists:seq(CommitIndex+1, NewCommitIndex)),
-    State#state{commit_index=NewCommitIndex, client_reqs=NewClientReqs}.
+                                      state_machine=StateMachine}=State0) ->
+   lists:foldl(fun(Index, #state{client_reqs=CliReqs}=State) ->
+       NewState = State#state{commit_index=Index},
+       case rafter_log:get_entry(?logname(), Index) of
+
+           %% Normal Operation. Apply Command to StateMachine.
+           {ok, #rafter_entry{type=op, cmd=Command}} ->
+               {ok, Result} = StateMachine:apply(Command),
+               maybe_send_client_reply(Index, CliReqs, NewState, Result);
+
+           %% We have a committed transitional state, so reply 
+           %% successfully to the client. Then set the new stable
+           %% configuration. 
+           {ok, #rafter_entry{type=config, 
+                   cmd=#config{state=transitional}=C}} ->
+               S = stabilize_config(C, NewState),
+               maybe_send_client_reply(Index, CliReqs, S, S#state.config);
+
+           %% Nothing left to do. The configuration has already been set.
+           {ok, #rafter_entry{type=config,
+                   cmd=#config{state=stable}}} ->
+               NewState
+       end
+   end, State0, lists:seq(CommitIndex+1, NewCommitIndex)).
+
+-spec stabilize_config(#config{}, #state{}) -> #state{}.
+stabilize_config(#config{state=transitional, newservers=New}=C, #state{term=Term}=S)
+    when S#state.leader =:= S#state.me ->
+        Config = C#config{state=stable, oldservers=New, newservers=[]},
+        Entry = #rafter_entry{type=config, term=Term, cmd=Config},
+        State = S#state{config=Config},
+        {ok, _Index} = rafter_log:append(?logname(), [Entry]),
+        send_append_entries(State),
+        State.
+
+-spec maybe_send_client_reply(non_neg_integer(), [#client_req{}], #state{}, 
+                              term()) -> #state{}.
+maybe_send_client_reply(Index, CliReqs, S, Result) when S#state.leader =:= S#state.me ->
+    case find_client_req_by_index(Index, CliReqs) of
+        {ok, Req} ->
+            send_client_reply(Req, Result),
+            Reqs = delete_client_req_by_index(Index, CliReqs),
+            S#state{client_reqs=Reqs};
+        not_found ->
+            S 
+    end.
 
 commit(Responses, #state{commit_index=CommitIndex, config=Config}=State) ->
-    Min = quorum_min(Config, dict:to_list(Responses),
+    Min = rafter_config:quorum_min(Config, dict:to_list(Responses)),
     case Min > CommitIndex andalso safe_to_commit(Min, State) of
         true ->
             commit_entries(Min, State);

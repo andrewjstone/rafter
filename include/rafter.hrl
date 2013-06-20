@@ -32,9 +32,9 @@
             success :: boolean()}).
 
 -record(rafter_entry, {
-        version=0 :: non_neg_integer(),
+        type :: config | atom(),
         term :: non_neg_integer(),
-        cmd :: binary()}).
+        cmd :: term()}).
 
 -record(config, {
     state :: 
@@ -51,7 +51,7 @@
         %% any majority of oldservers and any majority of the newservers.
         transitional,
 
-    oldservers :: list(),
-    newservers :: list()
+    oldservers = [] :: list(),
+    newservers = [] :: list()
 }).
 
