@@ -3,7 +3,8 @@
 -include("rafter.hrl").
 
 %% API
--export([quorum/2, quorum_min/2]).
+-export([quorum/2, quorum_min/2, voters/1, voters/2, followers/2,
+         reconfig/2, allow_config/2]).
 
 %%====================================================================
 %% API
@@ -44,6 +45,42 @@ quorum(Servers, Responses) ->
     TrueResponses = [R || {Peer, R} <- dict:to_list(Responses), R =:= true,
                                         lists:member(Peer, Servers)],
     length(TrueResponses) + 1 > length(Servers)/2.
+
+%% @doc list of voters excluding me
+-spec voters(term(), #config{}) -> list().
+voters(Me, Config) ->
+    lists:delete(Me, voters(Config)).
+
+%% @doc list of all voters
+-spec voters(#config{}) -> list().
+voters(#config{state=transitional, oldservers=Old, newservers=New}) ->
+    sets:to_list(sets:from_list(Old ++ New));
+voters(#config{oldservers=Old}) ->
+    Old.
+
+%% @doc All followers. In staging, some followers are not voters.
+-spec followers(term(), #config{}) -> list().
+followers(Me, #config{state=transitional, oldservers=Old, newservers=New}) ->
+    lists:delete(Me, sets:to_list(sets:from_list(Old ++ New)));
+followers(Me, #config{state=staging, oldservers=Old, newservers=New}) ->
+    lists:delete(Me, sets:to_list(sets:from_list(Old ++ New)));
+followers(Me, #config{oldservers=Old}) ->
+    lists:delete(Me, Old).
+
+-spec reconfig(#config{}, list()) -> #config{}.
+reconfig(#config{state=blank}=Config, Servers) ->
+    Config#config{state=transitional, newservers=Servers};
+reconfig(#config{state=stable}=Config, Servers) ->
+    Config#config{state=transitional, newservers=Servers}.
+
+-spec allow_config(#config{}, list()) -> boolean().
+allow_config(#config{state=blank}, _NewServers) ->
+    true;
+allow_config(#config{state=stable, oldservers=OldServers}, NewServers) 
+    when NewServers =/= OldServers ->
+    true;
+allow_config(_Config, _NewServers) ->
+    false.
 
 %%====================================================================
 %% Internal Functions 

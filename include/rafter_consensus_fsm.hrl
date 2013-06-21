@@ -28,7 +28,6 @@
 
     %% All servers making up the ensemble
     me :: string(),
-    peers :: list(string()),
 
     config :: term(),
     

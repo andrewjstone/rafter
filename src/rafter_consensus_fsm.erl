@@ -13,7 +13,7 @@
 -define(timeout(), timeout(State#state.timer_start, State#state.timer_duration)).
 
 %% API
--export([start/0, stop/1, start/2, start_link/4, leader/1, op/2, set_config/2,
+-export([start/0, stop/1, start/1, start_link/3, leader/1, op/2, set_config/2,
          send/2, send_sync/2]).
 
 %% gen_fsm callbacks
@@ -28,18 +28,16 @@
 
 %% This function is simply for testing a single peer with erlang transport
 start() ->
-    Me = peer1,
-    Peers = [peer2, peer3, peer4, peer5],
-    start(Me, Peers).
+    start(peer1).
 
 stop(Pid) ->
     gen_fsm:send_all_state_event(Pid, stop).
 
-start(Me, Peers) ->
-    gen_fsm:start({local, Me}, ?MODULE, [Me, Peers], []).
+start(Me) ->
+    gen_fsm:start({local, Me}, ?MODULE, [Me], []).
 
-start_link(NameAtom, Me, Peers, StateMachine) ->
-    gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, Peers, StateMachine], []).
+start_link(NameAtom, Me, StateMachine) ->
+    gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, StateMachine], []).
 
 leader(Peer) ->
     gen_fsm:sync_send_all_state_event(Peer, get_leader, 100).
@@ -64,18 +62,18 @@ send_sync(To, Msg) ->
 %% gen_fsm callbacks 
 %%=============================================================================
 
-init([Me, Peers, StateMachine]) ->
+init([Me, StateMachine]) ->
     random:seed(),
     Duration = election_timeout(),
     State = #state{term=0,
-                   peers=Peers,
                    me=Me, 
                    responses=dict:new(),
                    followers=[],
                    timer_start=os:timestamp(),
                    timer_duration = Duration,
                    state_machine=StateMachine},
-    {ok, follower, State, Duration}.
+    NewState = State#state{config=rafter_log:get_config(?logname())},
+    {ok, follower, NewState, Duration}.
 
 format_status(_, [_, State]) ->
     Data = lager:pr(State, ?MODULE),
@@ -308,12 +306,13 @@ leader(#request_vote{}, _From, #state{me=Me, term=CurrentTerm}=State) ->
     Rpy = #vote{from=Me, term=CurrentTerm, success=false},
     {reply, Rpy, leader, State, ?timeout()};
 
-leader({set_config, {Id, NewServers}}, From, #state{term=Term, config=C}=State) ->
-    case allow_config(C, NewServers) of
+leader({set_config, {Id, NewServers}}, From, 
+       #state{me=Me, followers=F, term=Term, config=C}=State) ->
+    case rafter_config:allow_config(C, NewServers) of
         true ->
-            Config = reconfig(C, NewServers),
+            {Followers, Config} = reconfig(Me, F, C, NewServers, State),
             Entry = #rafter_entry{type=config, term=Term, cmd=Config},
-            NewState = append(Id, From, Entry, State#state{config=Config}),
+            NewState = append(Id, From, Entry, State#state{config=Config, followers=Followers}),
             {next_state, leader, NewState, ?timeout()};
         false ->
             {reply, {error, config_in_progress}, leader, State, ?timeout()}
@@ -330,20 +329,28 @@ leader({op, {Id, Command }}, From,
 %% Internal Functions 
 %%=============================================================================
 
--spec reconfig(#config{}, list()) -> #config{}.
-reconfig(#config{state=blank}=Config, Servers) ->
-    Config#config{state=transitional, newservers=Servers};
-reconfig(#config{state=stable}=Config, Servers) ->
-    Config#config{state=transitional, newservers=Servers}.
+-spec reconfig(term(), dict(), #config{}, list(), #state{}) -> {dict(), #config{}}.
+reconfig(Me, OldFollowers, Config0, NewServers, State) ->
+    Config = rafter_config:reconfig(Config0, NewServers),
+    OldSet = sets:from_list([K || {K, _} <- dict:to_list(OldFollowers)]),
+    NewSet = sets:from_list(lists:delete(Me, NewServers)),
+    AddedServers = sets:to_list(sets:subtract(NewSet, OldSet)),
+    RemovedServers = sets:to_list(sets:subtract(OldSet, NewSet)),
+    Followers0 = add_followers(AddedServers, OldFollowers, State),
+    Followers = remove_followers(RemovedServers, Followers0),
+    {Followers, Config}.
 
--spec allow_config(#config{}, list()) -> boolean().
-allow_config(#config{state=blank}, _NewServers) ->
-    true;
-allow_config(#config{state=stable, oldservers=OldServers}, NewServers) 
-    when NewServers =/= OldServers ->
-    true;
-allow_config(_Config, _NewServers) ->
-    false.
+-spec add_followers(list(), dict(), #state{}) -> dict().
+add_followers(NewServers, Followers, State) ->
+    NextIndex = rafter_log:get_last_index(?logname()) + 1,
+    NewFollowers = [{S, NextIndex} || S <- NewServers],
+    dict:from_list(NewFollowers ++ dict:to_list(Followers)).
+
+-spec remove_followers(list(), dict()) -> dict().
+remove_followers(Servers, Followers0) ->
+    lists:foldl(fun(S, Followers) ->
+                    dict:erase(S, Followers)
+                end, Followers0, Servers).
 
 -spec append(binary(), term(), #rafter_entry{}, #state{}) -> #state{}.
 append(Id, From, Entry, #state{me=Me, term=Term, client_reqs=Reqs}=State) ->
@@ -551,13 +558,14 @@ decrement_follower_index(From, Followers) ->
 %%      there is an error or a timeout no message is sent. This helps preserve
 %%      the asynchrnony of the consensus fsm, while maintaining the rpc 
 %%      semantics for the request_vote message as described in the raft paper.
-request_votes(#state{peers=Peers, term=Term, me=Me}=State) ->
+request_votes(#state{config=Config, term=Term, me=Me}=State) ->
+    Voters = rafter_config:voters(Config),
     Log = ?logname(),
     Msg = #request_vote{term=Term,
                         from=Me,
                         last_log_index=rafter_log:get_last_index(Log), 
                         last_log_term=rafter_log:get_last_term(Log)},
-    [rafter_requester:send(Peer, Msg) || Peer <- Peers].
+    [rafter_requester:send(Peer, Msg) || Peer <- Voters].
 
 become_leader(#state{me=Me}=State) ->
     %% TODO: Commit a noop entry to the log so we can move the commit index
@@ -566,7 +574,8 @@ become_leader(#state{me=Me}=State) ->
                 followers=initialize_followers(State),
                 timer_start=os:timestamp()}.
 
-initialize_followers(#state{peers=Peers}=State) ->
+initialize_followers(#state{me=Me, config=Config}=State) ->
+    Peers = rafter_config:followers(Me, Config),
     NextIndex = rafter_log:get_last_index(?logname()) + 1,
     Followers = [{Peer, NextIndex} || Peer <- Peers],
     dict:from_list(Followers).
