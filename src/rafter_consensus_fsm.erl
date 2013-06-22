@@ -254,9 +254,9 @@ candidate(#append_entries{}, _From, State) ->
 candidate({op, _Command}, _From, #state{leader=undefined}=State) ->
     {reply, {error, election_in_progress}, candidate, State, ?timeout()}.
 
-%% We have just been elected leader because of an initial configuration 
-%% (init_config =/= undefined). Append the initial config and continue to the next
-%% state after clearing init_config.
+%% We have just been elected leader because of an initial configuration. 
+%% Append the initial config and set init_config=complete.
+%% This configuration will be replicated on the timeout.
 leader(timeout, #state{term=Term, init_config=[Id, From], config=C}=S) ->
     Entry = #rafter_entry{type=config, term=Term, cmd=C},
     State = append(Id, From, Entry, S),
