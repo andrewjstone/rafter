@@ -10,7 +10,7 @@
         get_term/1, get_term/2, get_last_index/0, get_last_index/1, 
         get_last_term/0, get_last_term/1, truncate/1, truncate/2,
         get_voted_for/1, set_voted_for/2, get_current_term/1, set_current_term/2,
-        get_config/1, set_config/2]).
+        get_config/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -43,9 +43,6 @@ append(Name, Entries) ->
 
 get_config(Name) ->
     gen_server:call(Name, get_config).
-
-set_config(Name, NewConfig) ->
-    gen_server:call(Name, {set_config, NewConfig}).
 
 get_last_index() ->
     gen_server:call(?MODULE, get_last_index).
@@ -128,17 +125,14 @@ format_status(_, [_, State]) ->
     Data = lager:pr(State, ?MODULE),
     [{data, [{"StateData", Data}]}].
 
-handle_call({append, NewEntries}, _From, #state{entries=OldEntries}=State) ->
+handle_call({append, NewEntries}, _From, #state{entries=OldEntries, config=C}=State) ->
+    Config = find_config(NewEntries, C),
     Entries = NewEntries ++ OldEntries,
     Index = length(Entries),
-    {reply, {ok, Index}, State#state{entries=Entries}};
+    {reply, {ok, Index}, State#state{entries=Entries, config=Config}};
 
 handle_call(get_config, _From, #state{config=Config}=State) ->
     {reply, Config, State};
-
-handle_call({set_config, NewConfig}, _From, State) ->
-    NewState = State#state{config=NewConfig},
-    {reply, ok, NewState};
 
 handle_call(get_last_entry, _From, #state{entries=[]}=State) ->
     {reply, {ok, not_found}, State};
@@ -189,3 +183,15 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+
+%%====================================================================
+%% Internal Functions 
+%%====================================================================
+find_config(Entries, CurrentConfig) ->
+    lists:foldl(fun(#rafter_entry{type=config, cmd=Config}, _) ->
+                      Config;
+                   (_, Acc) ->
+                      Acc
+                end, CurrentConfig, Entries).
+

@@ -10,6 +10,7 @@
     term = 0 :: non_neg_integer(),
     voted_for :: term(),
     commit_index = 0 :: non_neg_integer(),
+    init_config :: undefined | list() | complete,
 
     %% The last time a timer was created
     timer_start :: non_neg_integer(),

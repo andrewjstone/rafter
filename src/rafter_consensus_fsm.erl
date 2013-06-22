@@ -68,7 +68,7 @@ init([Me, StateMachine]) ->
     State = #state{term=0,
                    me=Me, 
                    responses=dict:new(),
-                   followers=[],
+                   followers=dict:new(),
                    timer_start=os:timestamp(),
                    timer_duration = Duration,
                    state_machine=StateMachine},
@@ -114,9 +114,15 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %% RPC Responses get handled in State/2 functions.
 %%=============================================================================
 
-%% Election timeout has expired. Go to candidate state.
-follower(timeout, State) ->
-    {next_state, candidate, State, 0};
+%% Election timeout has expired. Go to candidate state iff we are a voter.
+follower(timeout, #state{config=Config, me=Me}=State) ->
+    case rafter_config:has_vote(Me, Config) of
+        false ->
+            Duration = election_timeout(),
+            {next_state, follower, State, Duration};
+        true ->
+            {next_state, candidate, State, 0}
+    end;
 
 %% Ignore stale messages.
 follower(#vote{}, State) ->
@@ -134,7 +140,7 @@ follower(#append_entries{term=Term}, _From,
     {reply, Rpy, follower, State, ?timeout()};
 follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex, 
                          entries=Entries, commit_index=CommitIndex}=AppendEntries,
-         _From, #state{me=Me, config=C}=State) ->
+         _From, #state{me=Me}=State) ->
     Duration = election_timeout(),
     State2=set_term(Term, State),
     State3=State2#state{timer_start=os:timestamp(), timer_duration=Duration},
@@ -145,12 +151,29 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
         true ->
             ok = rafter_log:truncate(?logname(), PrevLogIndex),
             {ok, CurrentIndex}  = rafter_log:append(?logname(), Entries),
-            Config = maybe_reconfig(C, Entries),
+            Config = rafter_log:get_config(?logname()),
             NewRpy = Rpy#append_entries_rpy{success=true, index=CurrentIndex},
             State4 = commit_entries(CommitIndex, State3),
             State5 = State4#state{leader=From, config=Config},
             {reply, NewRpy, follower, State5, Duration}
     end;
+
+%% Allow setting config in follower state only if the config is blank
+%% (e.g. the log is empty). A config entry must always be the first 
+%% entry in every log.
+follower({set_config, {Id, NewServers}}, From, 
+          #state{me=Me, followers=F, config=#config{state=blank}=C}=State) ->
+    {Followers, Config} = reconfig(Me, F, C, NewServers, State),
+    NewState = State#state{config=Config, followers=Followers,
+                           init_config=[Id, From]},
+    %% Transition to candidate state. Once we are elected leader we will
+    %% send the config to the other machines. We have to do it this way so that the entry we log
+    %% will have a valid term and can be committed without a noop.
+    %% Note that all other configs must be blank on the other machines.
+    {next_state, candidate, NewState, 0};
+follower({set_config, _}, _From, #state{leader=Leader}=State) ->
+    Reply = {error, {redirect, Leader}},
+    {reply, Reply, follower, State, ?timeout()};
 
 %% Redirect clients to leader.
 follower({op, _Command}, _From, #state{leader=undefined}=State) ->
@@ -158,14 +181,6 @@ follower({op, _Command}, _From, #state{leader=undefined}=State) ->
 follower({op, _Command}, _From, #state{leader=Leader}=State) ->
     Reply = {error, {redirect, Leader}},
     {reply, Reply, follower, State, ?timeout()}.
-
-maybe_reconfig(CurrentConfig, Entries) ->
-    lists:foldl(fun(#rafter_entry{type=config}=E, _) ->
-                        E;
-                    (_, Config) ->
-                        Config
-                end, CurrentConfig, Entries).
-                  
 
 %% The election timeout has elapsed so start an election
 candidate(timeout, #state{term=CurrentTerm, me=Me}=State) ->
@@ -211,6 +226,10 @@ candidate(#vote{success=true, from=From}, #state{responses=Responses,
             {next_state, candidate, NewState, ?timeout()}
     end.
 
+candidate({set_config, _}, _From, #state{leader=Leader}=State) ->
+    Reply = {error, {redirect, Leader}},
+    {reply, Reply, follower, State, ?timeout()};
+
 %% A Peer is simultaneously trying to become the leader
 %% If it has a higher term, step down and become follower.
 candidate(#request_vote{term=RequestTerm}=RequestVote, _From, 
@@ -234,6 +253,15 @@ candidate(#append_entries{}, _From, State) ->
 %% Leader should always be undefined here.
 candidate({op, _Command}, _From, #state{leader=undefined}=State) ->
     {reply, {error, election_in_progress}, candidate, State, ?timeout()}.
+
+%% We have just been elected leader because of an initial configuration 
+%% (init_config =/= undefined). Append the initial config and continue to the next
+%% state after clearing init_config.
+leader(timeout, #state{term=Term, init_config=[Id, From], config=C}=S) ->
+    Entry = #rafter_entry{type=config, term=Term, cmd=C},
+    State = append(Id, From, Entry, S),
+    NewState = State#state{init_config=complete},
+    {next_state, leader, NewState, 0};
 
 leader(timeout, State) ->
     Duration = heartbeat_timeout(),
@@ -312,7 +340,8 @@ leader({set_config, {Id, NewServers}}, From,
         true ->
             {Followers, Config} = reconfig(Me, F, C, NewServers, State),
             Entry = #rafter_entry{type=config, term=Term, cmd=Config},
-            NewState = append(Id, From, Entry, State#state{config=Config, followers=Followers}),
+            NewState0 = State#state{config=Config, followers=Followers},
+            NewState = append(Id, From, Entry, NewState0, leader),
             {next_state, leader, NewState, ?timeout()};
         false ->
             {reply, {error, config_in_progress}, leader, State, ?timeout()}
@@ -322,7 +351,7 @@ leader({set_config, {Id, NewServers}}, From,
 leader({op, {Id, Command }}, From, 
         #state{term=Term}=State) ->
     Entry = #rafter_entry{type=op, term=Term, cmd=Command},
-    NewState = append(Id, From, Entry, State),
+    NewState = append(Id, From, Entry, State, leader),
     {next_state, leader, NewState, ?timeout()}.
     
 %%=============================================================================
@@ -352,8 +381,15 @@ remove_followers(Servers, Followers0) ->
                     dict:erase(S, Followers)
                 end, Followers0, Servers).
 
+-spec append(binary(), term(), #rafter_entry{}, #state{}, leader) ->#state{}.
+append(Id, From, Entry, State, leader) ->
+    NewState = append(Id, From, Entry, State),
+    send_append_entries(State),
+    NewState.
+
 -spec append(binary(), term(), #rafter_entry{}, #state{}) -> #state{}.
-append(Id, From, Entry, #state{me=Me, term=Term, client_reqs=Reqs}=State) ->
+append(Id, From, Entry, 
+       #state{me=Me, term=Term, client_reqs=Reqs}=State) ->
     {ok, Index} = rafter_log:append(?logname(), [Entry]),
     {ok, Timer} = timer:send_after(?CLIENT_TIMEOUT, Me, {client_timeout, Id}),
     ClientRequest = #client_req{id=Id,
@@ -361,12 +397,7 @@ append(Id, From, Entry, #state{me=Me, term=Term, client_reqs=Reqs}=State) ->
                                 index=Index, 
                                 term=Term, 
                                 timer=Timer},
-    NewState = State#state{client_reqs=[ClientRequest | Reqs]},
-
-    %% This is not strictly necessary and only improves latency. 
-    %% We could just wait for the next heartbeat.
-    send_append_entries(State),
-    NewState.
+    State#state{client_reqs=[ClientRequest | Reqs]}.
 
 send_client_timeout_reply(#client_req{from=From, id=Id}) ->
     gen_fsm:reply(From, {error, timeout, Id}).
@@ -459,7 +490,7 @@ maybe_send_client_reply(Index, CliReqs, S, Result) when S#state.leader =:= S#sta
     end.
 
 commit(Responses, #state{commit_index=CommitIndex, config=Config}=State) ->
-    Min = rafter_config:quorum_min(Config, dict:to_list(Responses)),
+    Min = rafter_config:quorum_min(Config, Responses),
     case Min > CommitIndex andalso safe_to_commit(Min, State) of
         true ->
             commit_entries(Min, State);
@@ -559,7 +590,7 @@ decrement_follower_index(From, Followers) ->
 %%      the asynchrnony of the consensus fsm, while maintaining the rpc 
 %%      semantics for the request_vote message as described in the raft paper.
 request_votes(#state{config=Config, term=Term, me=Me}=State) ->
-    Voters = rafter_config:voters(Config),
+    Voters = rafter_config:voters(Me, Config),
     Log = ?logname(),
     Msg = #request_vote{term=Term,
                         from=Me,

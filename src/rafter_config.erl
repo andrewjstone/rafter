@@ -4,7 +4,7 @@
 
 %% API
 -export([quorum/2, quorum_min/2, voters/1, voters/2, followers/2,
-         reconfig/2, allow_config/2]).
+         reconfig/2, allow_config/2, has_vote/2]).
 
 %%====================================================================
 %% API
@@ -25,6 +25,8 @@ quorum_min(#config{state=transitional,
 %% Responses doesn't contain the local response so it will be marked as 0. 
 %% We must therefore skip past it in a sorted list so we add 1 to the 
 %% quorum offset.
+quorum_min([], _) ->
+    0;
 quorum_min(Servers, Responses) ->
     Indexes = lists:sort(lists:map(fun(S) -> index(S, Responses) end, Servers)),
     lists:nth(length(Indexes) div 2 + 1, Indexes).
@@ -58,6 +60,14 @@ voters(#config{state=transitional, oldservers=Old, newservers=New}) ->
 voters(#config{oldservers=Old}) ->
     Old.
 
+-spec has_vote(term(), #config{}) -> boolean().
+has_vote(_Me, #config{state=blank}) ->
+    false;
+has_vote(Me, #config{state=transitional, oldservers=Old, newservers=New})->
+    lists:member(Me, Old) orelse lists:member(Me, New);
+has_vote(Me, #config{oldservers=Old}) ->
+    lists:member(Me, Old).
+
 %% @doc All followers. In staging, some followers are not voters.
 -spec followers(term(), #config{}) -> list().
 followers(Me, #config{state=transitional, oldservers=Old, newservers=New}) ->
@@ -67,9 +77,10 @@ followers(Me, #config{state=staging, oldservers=Old, newservers=New}) ->
 followers(Me, #config{oldservers=Old}) ->
     lists:delete(Me, Old).
 
+%% @doc Go right to stable mode if this is the initial configuration.
 -spec reconfig(#config{}, list()) -> #config{}.
 reconfig(#config{state=blank}=Config, Servers) ->
-    Config#config{state=transitional, newservers=Servers};
+    Config#config{state=stable, oldservers=Servers};
 reconfig(#config{state=stable}=Config, Servers) ->
     Config#config{state=transitional, newservers=Servers}.
 
@@ -91,6 +102,6 @@ index(Peer, Responses) ->
     case dict:find(Peer, Responses) of
         {ok, Index} ->
             Index;
-        _ ->
+        error ->
             0
     end.
