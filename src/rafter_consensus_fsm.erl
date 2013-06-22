@@ -475,7 +475,9 @@ stabilize_config(#config{state=transitional, newservers=New}=C, #state{term=Term
         State = S#state{config=Config},
         {ok, _Index} = rafter_log:append(?logname(), [Entry]),
         send_append_entries(State),
-        State.
+        State;
+stabilize_config(_, State) ->
+    State.
 
 -spec maybe_send_client_reply(non_neg_integer(), [#client_req{}], #state{}, 
                               term()) -> #state{}.
@@ -487,7 +489,9 @@ maybe_send_client_reply(Index, CliReqs, S, Result) when S#state.leader =:= S#sta
             S#state{client_reqs=Reqs};
         not_found ->
             S 
-    end.
+    end;
+maybe_send_client_reply(_, _, State, _) ->
+    State.
 
 commit(Responses, #state{commit_index=CommitIndex, config=Config}=State) ->
     Min = rafter_config:quorum_min(Config, Responses),
