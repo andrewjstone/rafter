@@ -45,8 +45,8 @@ cleanup(_) ->
 %% ====================================================================
 
 prop_leader_elected() ->
-    application:start(rafter),
-    rafter_sup:start_cluster(rafter_sm_echo),
+    rafter:start_cluster(),
+    rafter:set_config(peer1, [peer1, peer2, peer3, peer4, peer5]),
     %% leader election should occur in less than 1 second with the defaults. 
     %% This is a liveness constraint I'd like to maintain if possible.
     timer:sleep(1000),
@@ -54,6 +54,11 @@ prop_leader_elected() ->
     Rv = assert_exactly_one_leader(Status),
     application:stop(rafter),
     Rv.
+
+assert_each_node_elects_itself_in_blank_config() ->
+    Leaders = [rafter_consensus_fsm:leader(S) || S <- peers()],
+    Leaders =:= peers().
+
 
 assert_exactly_one_leader(Status) ->
     Leaders = lists:filter(fun(PeerStatus) ->
@@ -64,7 +69,10 @@ assert_exactly_one_leader(Status) ->
     1 =:= length(Leaders).
                     
 
+peers() ->
+    [peer1, peer2, peer3, peer4, peer5].
+
 get_status_from_peers() ->
-    [sys:get_status(Peer) || Peer <- [peer1, peer2, peer3, peer4, peer5]].
+    [sys:get_status(Peer) || Peer <- peers()].
 
 -endif.
