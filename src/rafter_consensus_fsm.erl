@@ -256,12 +256,13 @@ candidate({op, _Command}, _From, #state{leader=undefined}=State) ->
 
 %% We have just been elected leader because of an initial configuration. 
 %% Append the initial config and set init_config=complete.
-%% This configuration will be replicated on the timeout.
 leader(timeout, #state{term=Term, init_config=[Id, From], config=C}=S) ->
+    Duration = heartbeat_timeout(),
     Entry = #rafter_entry{type=config, term=Term, cmd=C},
-    State = append(Id, From, Entry, S),
-    NewState = State#state{init_config=complete},
-    {next_state, leader, NewState, 0};
+    State = append(Id, From, Entry, S, leader),
+    NewState = State#state{init_config=complete, timer_start=os:timestamp(),
+                           timer_duration=Duration},
+    {next_state, leader, NewState, Duration};
 
 leader(timeout, State) ->
     Duration = heartbeat_timeout(),
@@ -343,8 +344,8 @@ leader({set_config, {Id, NewServers}}, From,
             NewState0 = State#state{config=Config, followers=Followers},
             NewState = append(Id, From, Entry, NewState0, leader),
             {next_state, leader, NewState, ?timeout()};
-        false ->
-            {reply, {error, config_in_progress}, leader, State, ?timeout()}
+        Error ->
+            {reply, Error, leader, State, ?timeout()}
     end;
 
 %% Handle client requests
@@ -384,7 +385,7 @@ remove_followers(Servers, Followers0) ->
 -spec append(binary(), term(), #rafter_entry{}, #state{}, leader) ->#state{}.
 append(Id, From, Entry, State, leader) ->
     NewState = append(Id, From, Entry, State),
-    send_append_entries(State),
+    send_append_entries(NewState),
     NewState.
 
 -spec append(binary(), term(), #rafter_entry{}, #state{}) -> #state{}.
@@ -460,9 +461,13 @@ commit_entries(NewCommitIndex, #state{commit_index=CommitIndex,
                S = stabilize_config(C, NewState),
                maybe_send_client_reply(Index, CliReqs, S, S#state.config);
 
-           %% Nothing left to do. The configuration has already been set.
+           %% The configuration has already been set. Initial configuration goes
+           %% directly to stable state so needs to send a reply. Checking for
+           %% a client request is expensive, but config changes happen 
+           %% infrequently.
            {ok, #rafter_entry{type=config,
                    cmd=#config{state=stable}}} ->
+               maybe_send_client_reply(Index, CliReqs, State, State#state.config),
                NewState
        end
    end, State0, lists:seq(CommitIndex+1, NewCommitIndex)).

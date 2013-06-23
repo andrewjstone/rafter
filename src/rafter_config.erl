@@ -90,8 +90,11 @@ allow_config(#config{state=blank}, _NewServers) ->
 allow_config(#config{state=stable, oldservers=OldServers}, NewServers) 
     when NewServers =/= OldServers ->
     true;
+allow_config(#config{oldservers=OldServers}, NewServers) 
+    when NewServers =:= OldServers -> 
+    {error, not_modified};
 allow_config(_Config, _NewServers) ->
-    false.
+    {error, config_in_progress}.
 
 %%====================================================================
 %% Internal Functions 
