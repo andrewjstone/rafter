@@ -45,22 +45,38 @@ cleanup(_) ->
 %% ====================================================================
 
 prop_quorum_min() ->
-    ?FORALL({Config, Responses}, {config(), responses()},
+    ?FORALL({Config, {Me, Responses}}, {config(), responses()},
         begin
-            _Min = rafter_config:quorum_min(Config, dict:from_list(Responses)),
-            true
+            ResponsesDict = dict:from_list(Responses),
+            case rafter_config:quorum_min(Me, Config, ResponsesDict) of
+                0 ->
+                    true;
+                QuorumMin ->
+                    TrueDict = dict:from_list(map_to_true(QuorumMin, Responses)),
+                    ?assertEqual(true, rafter_config:quorum(Me, Config, TrueDict)),
+                    true
+            end
         end).
 
+map_to_true(QuorumMin, Values) ->
+    lists:map(fun({Key, Val}) when Val >= QuorumMin ->
+                    {Key, true};
+                 ({Key, _}) ->
+                    {Key, false}
+              end, Values).
 
 %% ====================================================================
 %% EQC Generators
 %% ====================================================================
 
 responses() ->
-    list(response()).
+    Me = server(),
+    {Me, list(response(Me))}.
 
-response() ->
-    {server(), rafter_gen:non_neg_integer()}.
+response(Me) ->
+    ?SUCHTHAT({Server, _Index}, 
+              {server(), rafter_gen:non_neg_integer()},
+              Me =/= Server).
 
 server() ->
     oneof([a,b,c,d,e,f,g,h,i,j,k,l,m,n,o]).

@@ -214,10 +214,10 @@ candidate(#vote{success=false, from=From}, #state{responses=Responses}=State) ->
     {next_state, candidate, NewState, ?timeout()};
 
 %% Sweet, someone likes us! Do we have enough votes to get elected?
-candidate(#vote{success=true, from=From}, #state{responses=Responses,
+candidate(#vote{success=true, from=From}, #state{responses=Responses, me=Me,
                                                  config=Config}=State) ->
     NewResponses = dict:store(From, true, Responses),
-    case rafter_config:quorum(Config, NewResponses) of
+    case rafter_config:quorum(Me, Config, NewResponses) of
         true ->
             NewState = become_leader(State),
             {next_state, leader, NewState, 0};
@@ -498,8 +498,10 @@ maybe_send_client_reply(Index, CliReqs, S, Result) when S#state.leader =:= S#sta
 maybe_send_client_reply(_, _, State, _) ->
     State.
 
-commit(Responses, #state{commit_index=CommitIndex, config=Config}=State) ->
-    Min = rafter_config:quorum_min(Config, Responses),
+commit(Responses, #state{me=Me, 
+                         commit_index=CommitIndex, 
+                         config=Config}=State) ->
+    Min = rafter_config:quorum_min(Me, Config, Responses),
     case Min > CommitIndex andalso safe_to_commit(Min, State) of
         true ->
             commit_entries(Min, State);
