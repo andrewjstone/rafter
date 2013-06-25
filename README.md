@@ -1,11 +1,11 @@
 # UNDER CONSTRUCTION
 
-***Note that Rafter is in the process of being built and some of the things described below may not yet be implemented.***
+***Note that Rafter is in the process of being built and some of the things described below may be buggy or incomplete.***
 
 ### Introduction
 Rafter is more than just an erlang implementation of the [raft consensus protocol](https://ramcloud.stanford.edu/wiki/download/attachments/11370504/raft.pdf). It aims to take the pain away from building Consistent(2F+1 CP) distributed systems, as well as act as a library for leader election and routing. A main goal is to keep a very small user api that automatically handles the problems of the everyday Erlang distributed systems developer. It is hopefully your ***libPaxos.dll*** for erlang.
 
-Rafter is meant to be used as a library application on an already created distibuted erlang cluster of 3 or 5 nodes. rafter peers are uniquely identified by ```{Name, Node}``` tuples which get passed in as static configuration. 
+Rafter is meant to be used as a library application on an already created erlang cluster of 3, 5, or 7 nodes. rafter peers are uniquely identified by atoms in a local setup and ```{Name, Node}``` tuples when using distributed erlang. Configuration is dynamic and reconfiguration can be achieved without taking the system down.
 
 ### Use cases
 The primary use case for rafter is distributed consensus with a replicated log. This abstraction can be used in place of paxos and zab.
@@ -16,6 +16,9 @@ For use cases such as implementing distributed databases, a replicated log can b
 It is important to note, that because operations are logged ***before*** they are executed by the state machine, they cannot be allowed to fail arbitrarily, or exhibit other non-deterministic behavior when executed by the state machine. If this were allowed, there would be no way to guarantee that each replica had the same state after the state machine transformation, nor could you tell which replica had the ***correct*** data! In other words, state machine operations should be pure functions and the state machine must be deterministic. Each replay of the in-order operations on each node must result in the exact same output state or else you cannot use the safety properties given to you by replicated logs. Note lastly, that operations that base their output state on the current time of day are inherently non-deterministic in distributed systems and should not be allowed in the state machines.
 
 An additional benefit of having a deterministic state machine is that it allows snapshotting of the current state to disk and truncating the already applied operations in the log after the state machine output is successfully snapshotted. This is known as ***compaction*** and provides output durability for the state machine itself which allows faster restarts on failed nodes, since the entire log no longer needs to be replayed. You can read more about compaction [here](https://ramcloud.stanford.edu/wiki/download/attachments/12386595/compaction.pdf?version=1&modificationDate=1367123151531).
+
+## Client API
+All operations on rafter should be performed via the client API in [rafter.erl](https://github.com/andrewjstone/rafter/blob/master/src/rafter.erl).
 
 ### starting a cluster of 5 nodes on a single vm for testing. Start all dependencies.
 The peers are all simple erlang processes. The consensus fsm's are named peer1..peer5.
