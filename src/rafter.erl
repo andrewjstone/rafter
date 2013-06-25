@@ -12,8 +12,7 @@ start_node(Me, StateMachineModule) ->
     rafter_sup:start_peer(Me, StateMachineModule).
 
 %% @doc Run an operation on the backend state machine. 
-%% Note: Peer is just the local node in production. The request will 
-%% automatically be routed to the leader.
+%% Note: Peer is just the local node in production.
 op(Peer, Command) ->
     Id = druuid:v4(),
     rafter_consensus_fsm:op(Peer, {Id, Command}).
