@@ -15,7 +15,8 @@ start_node(Me, StateMachineModule) ->
 %% Note: Peer is just the local node in production. The request will 
 %% automatically be routed to the leader.
 op(Peer, Command) ->
-    rafter_consensus_fsm:op(Peer, Command).
+    Id = druuid:v4(),
+    rafter_consensus_fsm:op(Peer, {Id, Command}).
 
 set_config(Peer, NewServers) ->
     Id = druuid:v4(),
