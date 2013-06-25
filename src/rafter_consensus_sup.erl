@@ -3,37 +3,37 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/3]).
+-export([start_link/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
--spec start_link(atom() | {atom(), atom()}, [atom()] | [{atom(), atom()}], atom()) -> ok.
-start_link(Me, Peers, StateMachine) when is_atom(Me) ->
-    SupName = sup_name(Me),
-    start_link(Me, SupName, Me, Peers, StateMachine);
-start_link(Me, Peers, StateMachine) ->
+-spec start_link(atom() | {atom(), atom()}, atom()) -> ok.
+start_link(Me, StateMachine) when is_atom(Me) ->
+    SupName = name(Me, "sup"),
+    start_link(Me, SupName, Me, StateMachine);
+start_link(Me, StateMachine) ->
     {Name, _Node} = Me,
-    SupName = sup_name(Name),
-    start_link(Name, SupName, Me, Peers, StateMachine).
+    SupName = name(Name, "sup"),
+    start_link(Name, SupName, Me, StateMachine).
 
-init([NameAtom, Me, Peers, StateMachine]) ->
-    ConsensusFsm = { rafter_consensus_fsm,
-                    {rafter_consensus_fsm, start_link, [NameAtom, Me, Peers, StateMachine]},
-                    permanent, 5000, worker, [rafter_consensus_fsm]},
-
-    LogName = list_to_atom(atom_to_list(NameAtom) ++ "_log"),
+init([NameAtom, Me, StateMachine]) ->
+    LogName = name(NameAtom, "log"),
     LogServer = { rafter_log,
                  {rafter_log, start_link, [LogName]},
                  permanent, 5000, worker, [rafter_log]},
 
-    {ok, { {one_for_all, 5, 10}, [LogServer, ConsensusFsm]} }.
+    ConsensusFsm = { rafter_consensus_fsm,
+                    {rafter_consensus_fsm, start_link, [NameAtom, Me, StateMachine]},
+                    permanent, 5000, worker, [rafter_consensus_fsm]},
+
+    {ok, {{one_for_all, 5, 10}, [LogServer, ConsensusFsm]}}.
 
 %% ===================================================================
 %% Private Functions 
 %% ===================================================================
-sup_name(Name) ->
-    list_to_atom(atom_to_list(Name) ++ "_sup").
+name(Name, Extension) ->
+    list_to_atom(atom_to_list(Name) ++ "_" ++ Extension).
 
-start_link(NameAtom, SupName, Me, Peers, StateMachine) ->
-    supervisor:start_link({local, SupName}, ?MODULE, [NameAtom, Me, Peers, StateMachine]).
+start_link(NameAtom, SupName, Me, StateMachine) ->
+    supervisor:start_link({local, SupName}, ?MODULE, [NameAtom, Me, StateMachine]).

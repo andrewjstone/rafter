@@ -22,7 +22,41 @@ The peers are all simple erlang processes. The consensus fsm's are named peer1..
 The corresponding log gen_servers are named peer1_log..peer5_log. Other processes are named in a similar fashion.
 
     rafter:start_cluster().
+
+### Set the initial configuration of the cluster.
+Rafter clusters support reconfiguration while the system is running. However, they start out blank and the first entry in any log must be a configuration entry which you set at initial cluster start time. Note that the operation will fail with a timeout if a majority of nodes are not reachable. However, once those peers become reachable, the command will be replicated and the cluster will be configured. 
+
+Since we already started our peers with the command above, this should succeed. ```peer1``` is arbitrary during initial config. It will become the first leader.
+
+```erlang
+    %% Remote Config
+    %% Nodes = [{peer1, node1@example.com}, {peer2, node2@example.com}, {peer3, node3@example.com}],
+
+    %% Local Config
+    Servers = [peer1, peer2, peer3, peer4, peer5],
+
+    rafter:set_config(peer1, Servers).
+```
+
+### Run an operation against the backend state machine
+Rafter allows customized backends that can run arbitrary code as long as that code is deterministic. The backend operations are replicated in the normal way and when the log entry is committed, the operations will be run against the configured state machine. The state machine configured with our local test cluster is 'rafter_sm_echo' and simply echo's back the arbitrary term given as 'Command'.
     
+   ```erlang
+   Command = do_something,
+   rafter:op(peer1, Command).
+   ```
+
+### Backend state machine callback modules
+Each rafter consensus group can utilize it's own state machine as long as the code is accessible in each erlang node's virtual machine. When a node is started the name of the backend module is passed in as shown below.
+
+```erlang
+    Me = peer1,
+    StateMachine = safe_redis,
+    rafter:start_node(Me, StateMachine).
+```
+
+Each state machine must only implement ```apply/1``` as shown [here](https://github.com/andrewjstone/rafter/blob/master/src/rafter_sm_echo.erl) . When snapshotting is implemented, other callbacks may be required.
+
 ### Show the current state of the consensus fsm
 
     %% peer1 is the name of a peer consensus fsm
@@ -31,15 +65,6 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 ### Show the current state of the log for a peer
     
     sys:get_status(peer1_log).
-
-### Append a command to the log. This will be wrapped in a client library soon.
-
-   ```erlang
-   %% Each client message should be unique
-   MsgId = 1,
-   Command = do_something,
-   rafter:op(peer3, {MsgId, Command}).
-   ```
 
 ### compiling code
 
@@ -51,8 +76,6 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
 
 ### TODO
 
- * Handle deterministic state machines
-   * Ensure a persistent log
  * Persistent log
     * write to file
     * compaction
