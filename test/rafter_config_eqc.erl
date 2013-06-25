@@ -3,15 +3,20 @@
 -ifdef(EQC).
 
 -include_lib("eqc/include/eqc.hrl").
+-include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+-behaviour(eqc_statem).
+
+%% eqc_statem exports
+-export([command/1, initial_state/0, next_state/3, postcondition/3,
+         precondition/2]).
 
 -include("rafter.hrl").
 
 -compile(export_all).
 
-%%-include_lib("eqc/include/eqc_statem.hrl").
-%%-behaviour(eqc_statem).
-%%-record(state, {peers = [] :: proplist()}).
+-record(state, {running_servers = [] :: list(atom())}).
 
 %% ====================================================================
 %% Tests
@@ -28,17 +33,41 @@ eqc_test_() ->
          ?_assertEqual(true, 
              eqc:quickcheck(
                  eqc:conjunction([{prop_quorum_min, 
-                                   eqc:numtests(1000, prop_quorum_min())}])))}
+                                      eqc:numtests(1, prop_quorum_min())},
+                                  {prop_config,
+                                      eqc:numtests(1, prop_config())}])))}
        ]
       }
      ]
     }.
 
 setup() ->
-    ok.
+    rafter:start_cluster().
 
 cleanup(_) ->
-    ok.
+    application:stop(rafter).
+
+%% ====================================================================
+%% eqc_statem callbacks
+%% ====================================================================
+initial_state() ->
+    InitialPeers = [peer1, peer2, peer3, peer4, peer5],
+    #state{running_servers = InitialPeers}.
+
+command(_S) ->
+    oneof([{call, rafter, set_config, [peer1, [peer1, peer2, peer3, peer4, peer5]]}]).
+
+precondition(_S, _) ->
+    true.
+
+next_state(S, _V, {call, rafter, set_config, _Args}) ->
+    S.
+
+postcondition(_S, {call, rafter, set_config, _Args}, {ok, _NewConfig, _Id}) ->
+    true;
+postcondition(_S, {call, rafter, set_config, [_, NewServers]}, {error, not_modified}) ->
+    Config = rafter_log:get_config(peer1_log),
+    Config#config.oldservers =:= NewServers.
 
 %% ====================================================================
 %% EQC Properties
@@ -56,6 +85,14 @@ prop_quorum_min() ->
                     ?assertEqual(true, rafter_config:quorum(Me, Config, TrueDict)),
                     true
             end
+        end).
+
+prop_config() ->
+    ?FORALL(Cmds, commands(?MODULE),
+        begin
+            {H, _S, Res} = run_commands(?MODULE, Cmds),
+            ?WHENFAIL(io:format("history is ~p~n Res = ~p~n", [H, Res]), equals(ok, Res)),
+            ok =:= Res
         end).
 
 map_to_true(QuorumMin, Values) ->
