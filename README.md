@@ -24,7 +24,9 @@ The corresponding log gen_servers are named peer1_log..peer5_log. Other processe
     rafter:start_cluster().
 
 ### Set the initial configuration of the cluster.
-Rafter clusters support reconfiguration while the system is running. However, they start out blank and the first entry in any log must be a configuration entry which you set at initial cluster start time. Note that the operation will fail with a timeout if a majority of nodes are not reachable. Since we already started them with the command above, this should succeed. ```peer1``` is arbitrary during initial config. It will become the first leader.
+Rafter clusters support reconfiguration while the system is running. However, they start out blank and the first entry in any log must be a configuration entry which you set at initial cluster start time. Note that the operation will fail with a timeout if a majority of nodes are not reachable. However, once those peers become reachable, the command will be replicated and the cluster will be configured. 
+
+Since we already started our peers with the command above, this should succeed. ```peer1``` is arbitrary during initial config. It will become the first leader.
 
 ```erlang
     %% Remote Config
@@ -33,7 +35,7 @@ Rafter clusters support reconfiguration while the system is running. However, th
     %% Local Config
     Servers = [peer1, peer2, peer3, peer4, peer5],
 
-    rafter:set_config(peer1, Servers);
+    rafter:set_config(peer1, Servers).
 ```
 
 ### Run an operation against the backend state machine
