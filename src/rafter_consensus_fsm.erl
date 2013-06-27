@@ -38,7 +38,9 @@ start(Me) ->
 
 start_link(NameAtom, Me, StateMachine) ->
     gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, StateMachine], []).
+    %%gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, StateMachine], [{debug, [trace]}]).
 
+-spec leader(peer()) -> peer() | undefined.
 leader(Peer) ->
     gen_fsm:sync_send_all_state_event(Peer, get_leader, 100).
 
@@ -182,6 +184,14 @@ follower({op, _Command}, _From, #state{leader=Leader}=State) ->
     Reply = {error, {redirect, Leader}},
     {reply, Reply, follower, State, ?timeout()}.
 
+%% This is the initial election to set the initial config. We did not
+%% get a quorum for our votes, so just reply to the user here and keep trying
+%% until the other nodes come up.
+candidate(timeout, #state{term=1, init_config=[_Id, From]}=S) ->
+    gen_fsm:reply(From, {error, peers_not_responding}),
+    State = S#state{init_config=complete},
+    {next_state, candidate, State, 0};
+
 %% The election timeout has elapsed so start an election
 candidate(timeout, #state{term=CurrentTerm, me=Me}=State) ->
     Duration = election_timeout(),
@@ -226,8 +236,8 @@ candidate(#vote{success=true, from=From}, #state{responses=Responses, me=Me,
             {next_state, candidate, NewState, ?timeout()}
     end.
 
-candidate({set_config, _}, _From, #state{leader=Leader}=State) ->
-    Reply = {error, {redirect, Leader}},
+candidate({set_config, _}, _From, State) ->
+    Reply = {error, election_in_progress},
     {reply, Reply, follower, State, ?timeout()};
 
 %% A Peer is simultaneously trying to become the leader
@@ -467,8 +477,7 @@ commit_entries(NewCommitIndex, #state{commit_index=CommitIndex,
            %% infrequently.
            {ok, #rafter_entry{type=config,
                    cmd=#config{state=stable}}} ->
-               maybe_send_client_reply(Index, CliReqs, State, State#state.config),
-               NewState
+               maybe_send_client_reply(Index, CliReqs, NewState, NewState#state.config)
        end
    end, State0, lists:seq(CommitIndex+1, NewCommitIndex)).
 
@@ -535,7 +544,6 @@ save_responses(error, Index, Responses, From) ->
 handle_request_vote(#request_vote{from=CandidateId, term=Term}=RequestVote, State) ->
     State2 = set_term(Term, State),
     {ok, Vote} = vote(RequestVote, State2),
-    %% TODO:  rafter_log:write(NewState),
     case Vote#vote.success of
         true ->
             ok = rafter_log:set_voted_for(?logname(), CandidateId),

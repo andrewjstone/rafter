@@ -31,9 +31,9 @@ quorum_min(Me, Servers, Responses) ->
     Indexes = lists:sort(lists:map(fun(S) -> index(S, Responses) end, Servers)),
     case lists:member(Me, Servers) of
         true ->
-            lists:nth(length(Indexes) div 2 + 1, Indexes);
+            lists:nth(length(Indexes) div 2 + 2, Indexes);
         false ->
-            lists:nth(length(Indexes) div 2, Indexes)
+            lists:nth(length(Indexes) div 2 + 1, Indexes)
     end.
 
 -spec quorum(term(), #config{} | list(), dict()) -> boolean().

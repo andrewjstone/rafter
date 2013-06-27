@@ -3,10 +3,10 @@
 -include("rafter.hrl").
 
 %% API
--export([start_node/2, op/2, set_config/2]).
+-export([start_node/2, op/2, set_config/2, get_leader/1]).
 
 %% Test API
--export([start_cluster/0, start_test_node/1, test_peers/1]).
+-export([start_cluster/0, start_test_node/1, test_peers/1, test/0]).
 
 start_node(Me, StateMachineModule) ->
     rafter_sup:start_peer(Me, StateMachineModule).
@@ -21,9 +21,19 @@ set_config(Peer, NewServers) ->
     Id = druuid:v4(),
     rafter_consensus_fsm:set_config(Peer, {Id, NewServers}).
 
+-spec get_leader(peer()) -> peer() | undefined.
+get_leader(Peer) ->
+    rafter_consensus_fsm:leader(Peer).
+
 %% =============================================
 %% Test Functions
 %% =============================================
+
+test() ->
+    application:start(lager),
+    application:start(rafter),
+    [rafter:start_node(P, rafter_sm_echo) || P <- [a, b, c]],
+    rafter:set_config(a, [a, b, c, d, e]).
 
 start_cluster() ->
     application:start(lager),
