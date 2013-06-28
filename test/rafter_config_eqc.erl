@@ -59,38 +59,22 @@ cleanup(_) ->
 
 initial_state() ->
     #state{running = [a, b, c, d, e],
-           config = #config{state=blank}}.
+           config = blank}.
 
 command(_S) ->
     oneof([{call, rafter, set_config, [server(), servers()]}]).
 
+%% Ensure the peer we are talking to is at least running. If there is no config
+%% yet then it should also be a member of the group it's trying to create.
+precondition(#state{running=Running, config=blank}, 
+             {call, rafter, set_config, [Peer, NewServers]}) ->
+    lists:member(Peer, Running) andalso lists:member(Peer, NewServers);
 
-%% There is no point of talking to a node that isn't running. That would be user error.
-%% The peer we want to talk to should either be a member of the current consensus
-%% group or the config is blank and the peer is part of the new config.
-precondition(#state{running=Running, config=C}, {call, rafter, set_config, [Peer, NewServers]}) ->
-    lists:member(Peer, Running) andalso (rafter_config:has_vote(Peer, C) orelse 
-        (C#config.state =:= blank andalso lists:member(Peer, NewServers))).
+precondition(#state{running=Running}, {call, rafter, set_config, [Peer, _]}) ->
+    lists:member(Peer, Running).
 
-%% Transition to stable state, because it's likely the new servers aren't 
-%% running during tests.
-next_state(#state{config=#config{state=blank}}=S, _, 
-           {call, rafter, set_config, [_Peer, NewServers]}) ->
-    S#state{config=#config{state=stable, oldservers=NewServers}};
-
-%% The config succeeded
-next_state(S, {ok, Config, _}, {call, rafter, set_config, [_Peer, _NewServers]}) ->
-    S#state{config=Config};
-
-%% We aren't sure what the config is after a timeout. In this case we 'reload' our config
-%% Timeouts during config should only occur when a majority of servers aren't up. Since the
-%% server we are talking to is up and leader, it will keep trying to set this config.
-%% In this case we set the 'proposed config' so that the postconditions 
-%% can be verified for a timeout.
-next_state(S, {error, timeout, _}, {call, rafter, set_config, [Peer, _NewServers]}) ->
-    Config = rafter_log:get_config(Peer ++ "_log"),
-    S#state{config=Config};
-
+next_state(#state{config=blank}=S, _, _) ->
+    S#state{config=normal};
 next_state(S, _, _) ->
     S.
 
@@ -99,32 +83,45 @@ postcondition(_S, {call, rafter, set_config, [Peer, _NewServers]}, {error, {redi
     rafter:get_leader(Peer) =:= Leader;
 
 %% Config set successfully
-postcondition(_s, {call, rafter, set_config, _args}, {ok, _newconfig, _id}) ->
+postcondition(_S, {call, rafter, set_config, _args}, {ok, _newconfig, _id}) ->
     true;
 
-postcondition(#state{config=C, running=Running}, {call, rafter, set_config, [Peer, _]},
+postcondition(#state{running=Running}, {call, rafter, set_config, [Peer, _]},
               {error, peers_not_responding}) ->
-    majority_not_running(Peer, C, Running);
+    Config = get_config(Peer),
+    majority_not_running(Peer, Config, Running);
 
-postcondition(#state{config=C, running=Running}, {call, rafter, set_config, [Peer, _]},
+postcondition(#state{running=Running}, {call, rafter, set_config, [Peer, _]},
               {error, election_in_progress}) ->
-    majority_not_running(Peer, C, Running);
+    Config = get_config(Peer),
+    majority_not_running(Peer, Config, Running);
 
 %% We either can't reach a majority of peers or this peer is not part of the consensus group
-postcondition(#state{config=C, running=Running}, 
+postcondition(#state{running=Running}, 
              {call, rafter, set_config, [Peer, _NewServers]}, {error, timeout, _}) ->
+    C = get_config(Peer),
     majority_not_running(Peer, C, Running) orelse not lists:member(Peer, C#config.oldservers);
 
-postcondition(#state{config=C}, {call, rafter, set_config, _}, {error, config_in_progress}) ->
+postcondition(_S, {call, rafter, set_config, [Peer, _]}, 
+             {error, not_consensus_group_member}) ->
+    C = get_config(Peer),
+    false =:= rafter_config:has_vote(Peer, C);
+        
+postcondition(_S, {call, rafter, set_config, [Peer, _]}, {error, config_in_progress}) ->
+    C = get_config(Peer),
     C#config.state =:= transitional;
 
-postcondition(#state{config=C}, 
-              {call, rafter, set_config, [_Peer, NewServers]}, {error, not_modified}) ->
+postcondition(#state{}, 
+              {call, rafter, set_config, [Peer, NewServers]}, {error, not_modified}) ->
+    C = get_config(Peer),
     C#config.oldservers =:= NewServers.
 
 %% ====================================================================
 %% EQC Properties
 %% ====================================================================
+
+get_config(Name) ->
+    rafter_log:get_config(logname(Name)).
 
 logname(FsmName) ->
     list_to_atom(atom_to_list(FsmName) ++ "_log").

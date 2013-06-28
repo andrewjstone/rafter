@@ -165,14 +165,21 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
 %% entry in every log.
 follower({set_config, {Id, NewServers}}, From, 
           #state{me=Me, followers=F, config=#config{state=blank}=C}=State) ->
-    {Followers, Config} = reconfig(Me, F, C, NewServers, State),
-    NewState = State#state{config=Config, followers=Followers,
-                           init_config=[Id, From]},
-    %% Transition to candidate state. Once we are elected leader we will
-    %% send the config to the other machines. We have to do it this way so that the entry we log
-    %% will have a valid term and can be committed without a noop.
-    %% Note that all other configs must be blank on the other machines.
-    {next_state, candidate, NewState, 0};
+    case rafter_config:has_vote(Me, C) of
+        true ->
+            {Followers, Config} = reconfig(Me, F, C, NewServers, State),
+            NewState = State#state{config=Config, followers=Followers,
+                                   init_config=[Id, From]},
+            %% Transition to candidate state. Once we are elected leader we will
+            %% send the config to the other machines. We have to do it this way
+            %% so that the entry we log  will have a valid term and can be 
+            %% committed without a noop.  Note that all other configs must 
+            %% be blank on the other machines.
+            {next_state, candidate, NewState, 0};
+        false ->
+            Error = {error, not_consensus_group_member},
+            {reply, Error, follower, State, ?timeout()}
+    end;
 follower({set_config, _}, _From, #state{leader=Leader}=State) ->
     Reply = {error, {redirect, Leader}},
     {reply, Reply, follower, State, ?timeout()};

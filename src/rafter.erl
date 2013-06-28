@@ -32,8 +32,7 @@ get_leader(Peer) ->
 test() ->
     application:start(lager),
     application:start(rafter),
-    [rafter:start_node(P, rafter_sm_echo) || P <- [a, b, c]],
-    rafter:set_config(a, [a, b, c, d, e]).
+    [rafter:start_node(P, rafter_sm_echo) || P <- [a, b, c, d, e]].
 
 start_cluster() ->
     application:start(lager),
