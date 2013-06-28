@@ -165,7 +165,7 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
 %% entry in every log.
 follower({set_config, {Id, NewServers}}, From, 
           #state{me=Me, followers=F, config=#config{state=blank}=C}=State) ->
-    case rafter_config:has_vote(Me, C) of
+    case lists:member(Me, NewServers) of
         true ->
             {Followers, Config} = reconfig(Me, F, C, NewServers, State),
             NewState = State#state{config=Config, followers=Followers,
@@ -180,11 +180,21 @@ follower({set_config, {Id, NewServers}}, From,
             Error = {error, not_consensus_group_member},
             {reply, Error, follower, State, ?timeout()}
     end;
+
+follower({set_config, _}, _From, #state{leader=undefined, me=Me, config=C}=State) ->
+    Error =
+        case rafter_config:has_vote(Me, C) of
+            false ->
+                not_consensus_group_member;
+            true ->
+                election_in_progress
+        end,
+    {reply, {error, Error}, follower, State, ?timeout()};
+
 follower({set_config, _}, _From, #state{leader=Leader}=State) ->
     Reply = {error, {redirect, Leader}},
     {reply, Reply, follower, State, ?timeout()};
 
-%% Redirect clients to leader.
 follower({op, _Command}, _From, #state{me=Me, config=Config, 
                                        leader=undefined}=State) ->
     Error = case rafter_config:has_vote(Me, Config) of
@@ -203,7 +213,7 @@ follower({op, _Command}, _From, #state{leader=Leader}=State) ->
 %% until the other nodes come up.
 candidate(timeout, #state{term=1, init_config=[_Id, From]}=S) ->
     gen_fsm:reply(From, {error, peers_not_responding}),
-    State = S#state{init_config=complete},
+    State = S#state{init_config=no_client},
     {next_state, candidate, State, 0};
 
 %% The election timeout has elapsed so start an election
@@ -277,6 +287,14 @@ candidate(#append_entries{}, _From, State) ->
 %% Leader should always be undefined here.
 candidate({op, _Command}, _From, #state{leader=undefined}=State) ->
     {reply, {error, election_in_progress}, candidate, State, ?timeout()}.
+
+leader(timeout, #state{term=Term, init_config=no_client, config=C}=S) ->
+    Duration = heartbeat_timeout(),
+    Entry = #rafter_entry{type=config, term=Term, cmd=C},
+    ok = append(Entry, S),
+    State = S#state{init_config=complete, timer_start=os:timestamp(),
+                     timer_duration=Duration},
+    {next_state, leader, State, Duration};
 
 %% We have just been elected leader because of an initial configuration. 
 %% Append the initial config and set init_config=complete.
@@ -386,8 +404,9 @@ leader({op, {Id, Command }}, From,
 -spec reconfig(term(), dict(), #config{}, list(), #state{}) -> {dict(), #config{}}.
 reconfig(Me, OldFollowers, Config0, NewServers, State) ->
     Config = rafter_config:reconfig(Config0, NewServers),
+    NewFollowers = rafter_config:followers(Me, Config),
     OldSet = sets:from_list([K || {K, _} <- dict:to_list(OldFollowers)]),
-    NewSet = sets:from_list(lists:delete(Me, NewServers)),
+    NewSet = sets:from_list(NewFollowers),
     AddedServers = sets:to_list(sets:subtract(NewSet, OldSet)),
     RemovedServers = sets:to_list(sets:subtract(OldSet, NewSet)),
     Followers0 = add_followers(AddedServers, OldFollowers, State),
@@ -405,6 +424,12 @@ remove_followers(Servers, Followers0) ->
     lists:foldl(fun(S, Followers) ->
                     dict:erase(S, Followers)
                 end, Followers0, Servers).
+
+-spec append(#rafter_entry{}, #state{}) -> #state{}.
+append(Entry, State) ->
+    {ok, _Index} = rafter_log:append(?logname(), [Entry]),
+    send_append_entries(State),
+    ok.
 
 -spec append(binary(), term(), #rafter_entry{}, #state{}, leader) ->#state{}.
 append(Id, From, Entry, State, leader) ->
@@ -540,6 +565,7 @@ commit(Responses, #state{me=Me,
     end.
 
 safe_to_commit(Index, #state{term=CurrentTerm}=State) ->
+    lager:info("Safe to commit: ~p ~p ~p~n", [CurrentTerm, rafter_log:get_term(?logname(), Index), Index]),
     CurrentTerm =:= rafter_log:get_term(?logname(), Index).
 
 %% We are about to transition to the follower state. Reset the necessary state.

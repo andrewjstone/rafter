@@ -16,8 +16,7 @@
 
 -compile(export_all).
 
--record(state, {running = [] :: list(peer()),
-                config :: #config{}}).
+-record(state, {running = [] :: list(peer())}).
 
 -define(QC_OUT(P),
     eqc:on_output(fun(Str, Args) ->
@@ -51,30 +50,47 @@ setup() ->
     [rafter:start_node(S, rafter_sm_echo) || S <- [a, b, c, d, e]].
 
 cleanup(_) ->
-    application:stop(rafter).
+    application:stop(rafter),
+    application:stop(lager).
+
+%% ====================================================================
+%% EQC Properties
+%% ====================================================================
+
+prop_quorum_min() ->
+    ?FORALL({Config, {Me, Responses}}, {config(), responses()},
+        begin
+            ResponsesDict = dict:from_list(Responses),
+            case rafter_config:quorum_min(Me, Config, ResponsesDict) of
+                0 ->
+                    true;
+                QuorumMin ->
+                    TrueDict = dict:from_list(map_to_true(QuorumMin, Responses)),
+                    ?assertEqual(true, rafter_config:quorum(Me, Config, TrueDict)),
+                    true
+            end
+        end).
+
+prop_config() ->
+    ?FORALL(Cmds, commands(?MODULE),
+        begin
+            {H, S, Res} = run_commands(?MODULE, Cmds),
+            ?WHENFAIL(io:format("history is ~p~n Res = ~p~n State = ~p~n", [H, Res, S]), equals(ok, Res))
+        end).
 
 %% ====================================================================
 %% eqc_statem callbacks
 %% ====================================================================
 
 initial_state() ->
-    #state{running = [a, b, c, d, e],
-           config = blank}.
+    #state{running = [a, b, c, d, e]}.
 
 command(_S) ->
     oneof([{call, rafter, set_config, [server(), servers()]}]).
 
-%% Ensure the peer we are talking to is at least running. If there is no config
-%% yet then it should also be a member of the group it's trying to create.
-precondition(#state{running=Running, config=blank}, 
-             {call, rafter, set_config, [Peer, NewServers]}) ->
-    lists:member(Peer, Running) andalso lists:member(Peer, NewServers);
-
 precondition(#state{running=Running}, {call, rafter, set_config, [Peer, _]}) ->
     lists:member(Peer, Running).
 
-next_state(#state{config=blank}=S, _, _) ->
-    S#state{config=normal};
 next_state(S, _, _) ->
     S.
 
@@ -100,7 +116,7 @@ postcondition(#state{running=Running}, {call, rafter, set_config, [Peer, _]},
 postcondition(#state{running=Running}, 
              {call, rafter, set_config, [Peer, _NewServers]}, {error, timeout, _}) ->
     C = get_config(Peer),
-    majority_not_running(Peer, C, Running) orelse not lists:member(Peer, C#config.oldservers);
+    majority_not_running(Peer, C, Running); 
 
 postcondition(_S, {call, rafter, set_config, [Peer, _]}, 
              {error, not_consensus_group_member}) ->
@@ -116,41 +132,18 @@ postcondition(#state{},
     C = get_config(Peer),
     C#config.oldservers =:= NewServers.
 
-%% ====================================================================
-%% EQC Properties
-%% ====================================================================
-
-get_config(Name) ->
-    rafter_log:get_config(logname(Name)).
-
-logname(FsmName) ->
-    list_to_atom(atom_to_list(FsmName) ++ "_log").
-
-prop_quorum_min() ->
-    ?FORALL({Config, {Me, Responses}}, {config(), responses()},
-        begin
-            ResponsesDict = dict:from_list(Responses),
-            case rafter_config:quorum_min(Me, Config, ResponsesDict) of
-                0 ->
-                    true;
-                QuorumMin ->
-                    TrueDict = dict:from_list(map_to_true(QuorumMin, Responses)),
-                    ?assertEqual(true, rafter_config:quorum(Me, Config, TrueDict)),
-                    true
-            end
-        end).
-
-prop_config() ->
-    ?FORALL(Cmds, commands(?MODULE),
-        begin
-            {H, S, Res} = run_commands(?MODULE, Cmds),
-            ?WHENFAIL(io:format("history is ~p~n Res = ~p~n State = ~p~n", [H, Res, S]), equals(ok, Res))
-        end).
-
 
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
+
+-spec get_config(atom()) -> atom().
+get_config(Name) ->
+    rafter_log:get_config(logname(Name)).
+
+-spec logname(atom()) -> atom().
+logname(FsmName) ->
+    list_to_atom(atom_to_list(FsmName) ++ "_log").
 
 -spec quorum_dict(list(peer())) -> dict().
 quorum_dict(Servers) ->
