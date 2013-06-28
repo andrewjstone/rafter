@@ -178,8 +178,15 @@ follower({set_config, _}, _From, #state{leader=Leader}=State) ->
     {reply, Reply, follower, State, ?timeout()};
 
 %% Redirect clients to leader.
-follower({op, _Command}, _From, #state{leader=undefined}=State) ->
-    {reply, {error, election_in_progress}, follower, State, ?timeout()};
+follower({op, _Command}, _From, #state{me=Me, config=Config, 
+                                       leader=undefined}=State) ->
+    Error = case rafter_config:has_vote(Me, Config) of
+        false ->
+            not_consensus_group_member;
+        true ->
+            election_in_progress
+    end,
+    {reply, {error, Error}, follower, State, ?timeout()};
 follower({op, _Command}, _From, #state{leader=Leader}=State) ->
     Reply = {error, {redirect, Leader}},
     {reply, Reply, follower, State, ?timeout()}.
@@ -513,7 +520,14 @@ commit(Responses, #state{me=Me,
     Min = rafter_config:quorum_min(Me, Config, Responses),
     case Min > CommitIndex andalso safe_to_commit(Min, State) of
         true ->
-            commit_entries(Min, State);
+            NewState = commit_entries(Min, State),
+            case rafter_config:has_vote(Me, NewState#state.config) of
+                true ->
+                    NewState;
+                false ->
+                    %% We just committed a config that doesn't include ourself
+                    step_down(NewState#state.term, NewState)
+            end;
         false ->
             State
     end.
