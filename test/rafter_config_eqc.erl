@@ -127,6 +127,11 @@ postcondition(_S, {call, rafter, set_config, [Peer, _]}, {error, config_in_progr
     C = get_config(Peer),
     C#config.state =:= transitional;
 
+postcondition(#state{running=Running}, 
+             {call, rafter, set_config, [Peer, _]}, {error, invalid_initial_config}) ->
+    #config{state=blank}=C =  get_config(Peer),
+    majority_not_running(Peer, C, Running);
+
 postcondition(#state{}, 
               {call, rafter, set_config, [Peer, NewServers]}, {error, not_modified}) ->
     C = get_config(Peer),

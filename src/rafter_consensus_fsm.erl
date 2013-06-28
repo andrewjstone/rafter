@@ -231,6 +231,23 @@ candidate(timeout, #state{term=CurrentTerm, me=Me}=State) ->
     request_votes(NewState),
     {next_state, candidate, NewState, Duration};
 
+%% This should only happen if two machines are configured differently during 
+%% initial configuration such that one configuration includes both proposed leaders
+%% and the other only itself. Additionally, there is not a quorum of either
+%% configuration's servers running.
+%%
+%% (i.e. rafter:set_config(b, [k, b, j]), rafter:set_config(d, [i,k,b,d,o]).
+%%       when only b and d are running.)
+%%
+%% Thank you EQC for finding this one :)
+candidate(#vote{term=VoteTerm, success=false}, 
+          #state{term=Term, init_config=[_Id, From]}=State) 
+         when VoteTerm > Term ->
+    gen_fsm:reply(From, {error, invalid_initial_config}),
+    State2 = State#state{init_config=no_client},
+    NewState = step_down(VoteTerm, State2),
+    {next_state, follower, NewState, NewState#state.timer_duration};
+
 %% We are out of date. Go back to follower state. 
 candidate(#vote{term=VoteTerm, success=false}, #state{term=Term}=State) 
          when VoteTerm > Term ->
@@ -565,7 +582,6 @@ commit(Responses, #state{me=Me,
     end.
 
 safe_to_commit(Index, #state{term=CurrentTerm}=State) ->
-    lager:info("Safe to commit: ~p ~p ~p~n", [CurrentTerm, rafter_log:get_term(?logname(), Index), Index]),
     CurrentTerm =:= rafter_log:get_term(?logname(), Index).
 
 %% We are about to transition to the follower state. Reset the necessary state.
