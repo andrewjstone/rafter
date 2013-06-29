@@ -179,7 +179,7 @@ response(Me) ->
               Me =/= Server).
 
 server() ->
-    oneof([a,b,c,d,e,f,g,h,i,j,k,l,m,n,o]).
+    oneof([a,b,c,d,e,f,g,h,i]).
 
 servers() ->
     ?SUCHTHAT(Servers, oneof([three_servers(), five_servers(), seven_servers()]),

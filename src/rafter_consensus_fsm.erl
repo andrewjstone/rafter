@@ -244,7 +244,7 @@ candidate(#vote{term=VoteTerm, success=false},
           #state{term=Term, init_config=[_Id, From]}=State) 
          when VoteTerm > Term ->
     gen_fsm:reply(From, {error, invalid_initial_config}),
-    State2 = State#state{init_config=no_client},
+    State2 = State#state{init_config=undefined, config=#config{state=blank}},
     NewState = step_down(VoteTerm, State2),
     {next_state, follower, NewState, NewState#state.timer_duration};
 
@@ -290,6 +290,27 @@ candidate(#request_vote{term=RequestTerm}=RequestVote, _From,
 candidate(#request_vote{}, _From, #state{term=CurrentTerm, me=Me}=State) ->
     Vote = #vote{term=CurrentTerm, success=false, from=Me},
     {reply, Vote, candidate, State, ?timeout()};
+
+%% Another peer is asserting itself as leader, and it must be correct because
+%% it was elected. We are still in initial config, which must have been a 
+%% misconfiguration. Clear the initial configuration and step down. Since we 
+%% still have an outstanding client request for inital config send an error
+%% response.
+candidate(#append_entries{term=RequestTerm}, _From, 
+          #state{init_config=[_, Client]}=State) ->
+    gen_fsm:reply(Client, {error, invalid_initial_config}),
+    %% Set to complete, we don't want another misconfiguration
+    State2 = State#state{init_config=complete, config=#config{state=blank}},
+    State3 = step_down(RequestTerm, State2),
+    {next_state, follower, State3, State3#state.timer_duration};
+
+%% Same as the above clause, but we don't need to send an error response.
+candidate(#append_entries{term=RequestTerm}, _From, 
+          #state{init_config=no_client}=State) ->
+    %% Set to complete, we don't want another misconfiguration
+    State2 = State#state{init_config=complete, config=#config{state=blank}},
+    State3 = step_down(RequestTerm, State2),
+    {next_state, follower, State3, State3#state.timer_duration};
 
 %% Another peer is asserting itself as leader. If it has a current term
 %% step down and become follower. Otherwise do nothing
