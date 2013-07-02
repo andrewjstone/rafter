@@ -38,7 +38,9 @@ start(Me) ->
 
 start_link(NameAtom, Me, StateMachine) ->
     gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, StateMachine], []).
+    %%gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, StateMachine], [{debug, [trace]}]).
 
+-spec leader(peer()) -> peer() | undefined.
 leader(Peer) ->
     gen_fsm:sync_send_all_state_event(Peer, get_leader, 100).
 
@@ -163,24 +165,56 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
 %% entry in every log.
 follower({set_config, {Id, NewServers}}, From, 
           #state{me=Me, followers=F, config=#config{state=blank}=C}=State) ->
-    {Followers, Config} = reconfig(Me, F, C, NewServers, State),
-    NewState = State#state{config=Config, followers=Followers,
-                           init_config=[Id, From]},
-    %% Transition to candidate state. Once we are elected leader we will
-    %% send the config to the other machines. We have to do it this way so that the entry we log
-    %% will have a valid term and can be committed without a noop.
-    %% Note that all other configs must be blank on the other machines.
-    {next_state, candidate, NewState, 0};
+    case lists:member(Me, NewServers) of
+        true ->
+            {Followers, Config} = reconfig(Me, F, C, NewServers, State),
+            NewState = State#state{config=Config, followers=Followers,
+                                   init_config=[Id, From]},
+            %% Transition to candidate state. Once we are elected leader we will
+            %% send the config to the other machines. We have to do it this way
+            %% so that the entry we log  will have a valid term and can be 
+            %% committed without a noop.  Note that all other configs must 
+            %% be blank on the other machines.
+            {next_state, candidate, NewState, 0};
+        false ->
+            Error = {error, not_consensus_group_member},
+            {reply, Error, follower, State, ?timeout()}
+    end;
+
+follower({set_config, _}, _From, #state{leader=undefined, me=Me, config=C}=State) ->
+    Error =
+        case rafter_config:has_vote(Me, C) of
+            false ->
+                not_consensus_group_member;
+            true ->
+                election_in_progress
+        end,
+    {reply, {error, Error}, follower, State, ?timeout()};
+
 follower({set_config, _}, _From, #state{leader=Leader}=State) ->
     Reply = {error, {redirect, Leader}},
     {reply, Reply, follower, State, ?timeout()};
 
-%% Redirect clients to leader.
-follower({op, _Command}, _From, #state{leader=undefined}=State) ->
-    {reply, {error, election_in_progress}, follower, State, ?timeout()};
+follower({op, _Command}, _From, #state{me=Me, config=Config, 
+                                       leader=undefined}=State) ->
+    Error = case rafter_config:has_vote(Me, Config) of
+        false ->
+            not_consensus_group_member;
+        true ->
+            election_in_progress
+    end,
+    {reply, {error, Error}, follower, State, ?timeout()};
 follower({op, _Command}, _From, #state{leader=Leader}=State) ->
     Reply = {error, {redirect, Leader}},
     {reply, Reply, follower, State, ?timeout()}.
+
+%% This is the initial election to set the initial config. We did not
+%% get a quorum for our votes, so just reply to the user here and keep trying
+%% until the other nodes come up.
+candidate(timeout, #state{term=1, init_config=[_Id, From]}=S) ->
+    gen_fsm:reply(From, {error, peers_not_responding}),
+    State = S#state{init_config=no_client},
+    {next_state, candidate, State, 0};
 
 %% The election timeout has elapsed so start an election
 candidate(timeout, #state{term=CurrentTerm, me=Me}=State) ->
@@ -196,6 +230,23 @@ candidate(timeout, #state{term=CurrentTerm, me=Me}=State) ->
     ok = rafter_log:set_voted_for(?logname(), Me),
     request_votes(NewState),
     {next_state, candidate, NewState, Duration};
+
+%% This should only happen if two machines are configured differently during 
+%% initial configuration such that one configuration includes both proposed leaders
+%% and the other only itself. Additionally, there is not a quorum of either
+%% configuration's servers running.
+%%
+%% (i.e. rafter:set_config(b, [k, b, j]), rafter:set_config(d, [i,k,b,d,o]).
+%%       when only b and d are running.)
+%%
+%% Thank you EQC for finding this one :)
+candidate(#vote{term=VoteTerm, success=false}, 
+          #state{term=Term, init_config=[_Id, From]}=State) 
+         when VoteTerm > Term ->
+    gen_fsm:reply(From, {error, invalid_initial_config}),
+    State2 = State#state{init_config=undefined, config=#config{state=blank}},
+    NewState = step_down(VoteTerm, State2),
+    {next_state, follower, NewState, NewState#state.timer_duration};
 
 %% We are out of date. Go back to follower state. 
 candidate(#vote{term=VoteTerm, success=false}, #state{term=Term}=State) 
@@ -226,8 +277,8 @@ candidate(#vote{success=true, from=From}, #state{responses=Responses, me=Me,
             {next_state, candidate, NewState, ?timeout()}
     end.
 
-candidate({set_config, _}, _From, #state{leader=Leader}=State) ->
-    Reply = {error, {redirect, Leader}},
+candidate({set_config, _}, _From, State) ->
+    Reply = {error, election_in_progress},
     {reply, Reply, follower, State, ?timeout()};
 
 %% A Peer is simultaneously trying to become the leader
@@ -239,6 +290,27 @@ candidate(#request_vote{term=RequestTerm}=RequestVote, _From,
 candidate(#request_vote{}, _From, #state{term=CurrentTerm, me=Me}=State) ->
     Vote = #vote{term=CurrentTerm, success=false, from=Me},
     {reply, Vote, candidate, State, ?timeout()};
+
+%% Another peer is asserting itself as leader, and it must be correct because
+%% it was elected. We are still in initial config, which must have been a 
+%% misconfiguration. Clear the initial configuration and step down. Since we 
+%% still have an outstanding client request for inital config send an error
+%% response.
+candidate(#append_entries{term=RequestTerm}, _From, 
+          #state{init_config=[_, Client]}=State) ->
+    gen_fsm:reply(Client, {error, invalid_initial_config}),
+    %% Set to complete, we don't want another misconfiguration
+    State2 = State#state{init_config=complete, config=#config{state=blank}},
+    State3 = step_down(RequestTerm, State2),
+    {next_state, follower, State3, State3#state.timer_duration};
+
+%% Same as the above clause, but we don't need to send an error response.
+candidate(#append_entries{term=RequestTerm}, _From, 
+          #state{init_config=no_client}=State) ->
+    %% Set to complete, we don't want another misconfiguration
+    State2 = State#state{init_config=complete, config=#config{state=blank}},
+    State3 = step_down(RequestTerm, State2),
+    {next_state, follower, State3, State3#state.timer_duration};
 
 %% Another peer is asserting itself as leader. If it has a current term
 %% step down and become follower. Otherwise do nothing
@@ -253,6 +325,14 @@ candidate(#append_entries{}, _From, State) ->
 %% Leader should always be undefined here.
 candidate({op, _Command}, _From, #state{leader=undefined}=State) ->
     {reply, {error, election_in_progress}, candidate, State, ?timeout()}.
+
+leader(timeout, #state{term=Term, init_config=no_client, config=C}=S) ->
+    Duration = heartbeat_timeout(),
+    Entry = #rafter_entry{type=config, term=Term, cmd=C},
+    ok = append(Entry, S),
+    State = S#state{init_config=complete, timer_start=os:timestamp(),
+                     timer_duration=Duration},
+    {next_state, leader, State, Duration};
 
 %% We have just been elected leader because of an initial configuration. 
 %% Append the initial config and set init_config=complete.
@@ -278,12 +358,18 @@ leader(#append_entries_rpy{term=Term, success=false},
 
 %% The follower is not synced yet. Try the previous entry
 leader(#append_entries_rpy{from=From, success=false}, 
-       #state{followers=Followers}=State) ->
-    NextIndex = decrement_follower_index(From, Followers),
-    NewState = State#state{followers=dict:store(From, NextIndex, Followers)},
-    LastLogIndex = rafter_log:get_last_index(?logname()),
-    maybe_send_entry(From, NextIndex, LastLogIndex, NewState),
-    {next_state, leader, NewState, ?timeout()};
+       #state{followers=Followers, config=C, me=Me}=State) ->
+       case lists:member(From, rafter_config:followers(Me, C)) of
+           true ->
+               NextIndex = decrement_follower_index(From, Followers),
+               NewState = State#state{followers=dict:store(From, NextIndex, Followers)},
+               LastLogIndex = rafter_log:get_last_index(?logname()),
+               maybe_send_entry(From, NextIndex, LastLogIndex, NewState),
+               {next_state, leader, NewState, ?timeout()};
+           false ->
+               %% This is a reply from a previous configuration. Ignore it.
+               {next_state, leader, State, ?timeout()}
+       end;
 
 %% This is a stale reply from an old request. Ignore it.
 leader(#append_entries_rpy{term=Term, success=true}, 
@@ -292,20 +378,28 @@ leader(#append_entries_rpy{term=Term, success=true},
 
 %% Success!
 leader(#append_entries_rpy{from=From, success=true, index=Index},
-       #state{followers=Followers, responses=Responses}=State) ->
-    case save_responses(dict:find(From, Responses), Index, Responses, From) of
-        %% Duplicate Index Received 
-        Responses ->
-            {next_state, leader, State, ?timeout()};
-        NewResponses ->
-            State2 = commit(NewResponses, State),
-            NextIndex = increment_follower_index(From, Followers),
-            State3 = State2#state{
-                followers=dict:store(From, NextIndex, Followers),
-                responses=NewResponses},
-            LastLogIndex = rafter_log:get_last_index(?logname()),
-            maybe_send_entry(From, NextIndex, LastLogIndex, State3),
-            {next_state, leader, State3, ?timeout()}
+       #state{followers=Followers, responses=Responses, config=C, me=Me}=State) ->
+    case lists:member(From, rafter_config:followers(Me, C)) of
+        true ->
+            case save_responses(dict:find(From, Responses), Index, Responses, From) of
+                %% Duplicate Index Received 
+                Responses ->
+                    {next_state, leader, State, ?timeout()};
+                NewResponses ->
+                    State2 = commit(NewResponses, State),
+                    case State2#state.leader of
+                        undefined ->
+                            %% We just committed a config that doesn't include ourselves
+                            {next_state, follower, State2, ?timeout()};
+                        _ ->
+                            State3 = send_next_entry(From, Followers, 
+                                                     NewResponses, State2),
+                            {next_state, leader, State3, ?timeout()}
+                    end
+            end;
+        false ->
+            %% This is a reply from a previous configuration. Ignore it.
+            {next_state, leader, State, ?timeout()}
     end;
 
 %% Ignore stale votes.
@@ -359,11 +453,21 @@ leader({op, {Id, Command }}, From,
 %% Internal Functions 
 %%=============================================================================
 
+send_next_entry(From, Followers, Responses, State) ->
+    NextIndex = increment_follower_index(From, Followers),
+    NewState = State#state{followers=dict:store(From, NextIndex, Followers),
+                           responses=Responses},
+    LastLogIndex = rafter_log:get_last_index(?logname()),
+    maybe_send_entry(From, NextIndex, LastLogIndex, NewState),
+    NewState.
+
+
 -spec reconfig(term(), dict(), #config{}, list(), #state{}) -> {dict(), #config{}}.
 reconfig(Me, OldFollowers, Config0, NewServers, State) ->
     Config = rafter_config:reconfig(Config0, NewServers),
+    NewFollowers = rafter_config:followers(Me, Config),
     OldSet = sets:from_list([K || {K, _} <- dict:to_list(OldFollowers)]),
-    NewSet = sets:from_list(lists:delete(Me, NewServers)),
+    NewSet = sets:from_list(NewFollowers),
     AddedServers = sets:to_list(sets:subtract(NewSet, OldSet)),
     RemovedServers = sets:to_list(sets:subtract(OldSet, NewSet)),
     Followers0 = add_followers(AddedServers, OldFollowers, State),
@@ -381,6 +485,12 @@ remove_followers(Servers, Followers0) ->
     lists:foldl(fun(S, Followers) ->
                     dict:erase(S, Followers)
                 end, Followers0, Servers).
+
+-spec append(#rafter_entry{}, #state{}) -> #state{}.
+append(Entry, State) ->
+    {ok, _Index} = rafter_log:append(?logname(), [Entry]),
+    send_append_entries(State),
+    ok.
 
 -spec append(binary(), term(), #rafter_entry{}, #state{}, leader) ->#state{}.
 append(Id, From, Entry, State, leader) ->
@@ -443,9 +553,10 @@ delete_client_req_by_index(Index, ClientRequests) ->
 %%      client requests that these commits affect. Return the new state.
 -spec commit_entries(non_neg_integer(), #state{}) -> #state{}.
 commit_entries(NewCommitIndex, #state{commit_index=CommitIndex, 
-                                      state_machine=StateMachine}=State0) ->
-   lists:foldl(fun(Index, #state{client_reqs=CliReqs}=State) ->
-       NewState = State#state{commit_index=Index},
+                                      state_machine=StateMachine}=State) ->
+   LastIndex = min(rafter_log:get_last_index(?logname()), NewCommitIndex),
+   lists:foldl(fun(Index, #state{client_reqs=CliReqs}=State1) ->
+       NewState = State1#state{commit_index=Index},
        case rafter_log:get_entry(?logname(), Index) of
 
            %% Normal Operation. Apply Command to StateMachine.
@@ -467,10 +578,9 @@ commit_entries(NewCommitIndex, #state{commit_index=CommitIndex,
            %% infrequently.
            {ok, #rafter_entry{type=config,
                    cmd=#config{state=stable}}} ->
-               maybe_send_client_reply(Index, CliReqs, State, State#state.config),
-               NewState
+               maybe_send_client_reply(Index, CliReqs, NewState, NewState#state.config)
        end
-   end, State0, lists:seq(CommitIndex+1, NewCommitIndex)).
+   end, State, lists:seq(CommitIndex+1, LastIndex)).
 
 -spec stabilize_config(#config{}, #state{}) -> #state{}.
 stabilize_config(#config{state=transitional, newservers=New}=C, #state{term=Term}=S)
@@ -504,7 +614,14 @@ commit(Responses, #state{me=Me,
     Min = rafter_config:quorum_min(Me, Config, Responses),
     case Min > CommitIndex andalso safe_to_commit(Min, State) of
         true ->
-            commit_entries(Min, State);
+            NewState = commit_entries(Min, State),
+            case rafter_config:has_vote(Me, NewState#state.config) of
+                true ->
+                    NewState;
+                false ->
+                    %% We just committed a config that doesn't include ourself
+                    step_down(NewState#state.term, NewState)
+            end;
         false ->
             State
     end.
@@ -535,7 +652,6 @@ save_responses(error, Index, Responses, From) ->
 handle_request_vote(#request_vote{from=CandidateId, term=Term}=RequestVote, State) ->
     State2 = set_term(Term, State),
     {ok, Vote} = vote(RequestVote, State2),
-    %% TODO:  rafter_log:write(NewState),
     case Vote#vote.success of
         true ->
             ok = rafter_log:set_voted_for(?logname(), CandidateId),

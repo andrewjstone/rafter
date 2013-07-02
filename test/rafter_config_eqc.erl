@@ -16,8 +16,19 @@
 
 -compile(export_all).
 
--record(state, {running_servers = [] :: list(atom())}).
+-record(state, {running = [] :: list(peer()),
 
+                %% #config{} in an easier to match form
+                state=blank :: blank | transitional | stable,
+                oldservers=[] :: list(peer()),
+                newservers=[] :: list(peer()),
+
+                %% The peer we are communicating with during tests
+                to :: peer()}).
+
+-define(QC_OUT(P),
+    eqc:on_output(fun(Str, Args) ->
+                io:format(user, Str, Args) end, P)).
 %% ====================================================================
 %% Tests
 %% ====================================================================
@@ -29,45 +40,26 @@ eqc_test_() ->
        fun setup/0,
        fun cleanup/1,
        [%% Run the quickcheck tests
-        {timeout, 30,
+        {timeout, 120,
          ?_assertEqual(true, 
              eqc:quickcheck(
-                 eqc:conjunction([{prop_quorum_min, 
-                                      eqc:numtests(1, prop_quorum_min())},
-                                  {prop_config,
-                                      eqc:numtests(1, prop_config())}])))}
+                 ?QC_OUT(eqc:numtests(100, eqc:conjunction(
+                             [{prop_quorum_min, 
+                                     prop_quorum_min()},
+                              {prop_config,
+                                  prop_config()}])))))}
        ]
       }
      ]
     }.
 
 setup() ->
-    rafter:start_cluster().
+    application:start(lager),
+    application:start(rafter).
 
 cleanup(_) ->
-    application:stop(rafter).
-
-%% ====================================================================
-%% eqc_statem callbacks
-%% ====================================================================
-initial_state() ->
-    InitialPeers = [peer1, peer2, peer3, peer4, peer5],
-    #state{running_servers = InitialPeers}.
-
-command(_S) ->
-    oneof([{call, rafter, set_config, [peer1, [peer1, peer2, peer3, peer4, peer5]]}]).
-
-precondition(_S, _) ->
-    true.
-
-next_state(S, _V, {call, rafter, set_config, _Args}) ->
-    S.
-
-postcondition(_S, {call, rafter, set_config, _Args}, {ok, _NewConfig, _Id}) ->
-    true;
-postcondition(_S, {call, rafter, set_config, [_, NewServers]}, {error, not_modified}) ->
-    Config = rafter_log:get_config(peer1_log),
-    Config#config.oldservers =:= NewServers.
+    application:stop(rafter),
+    application:stop(lager).
 
 %% ====================================================================
 %% EQC Properties
@@ -89,11 +81,116 @@ prop_quorum_min() ->
 
 prop_config() ->
     ?FORALL(Cmds, commands(?MODULE),
-        begin
-            {H, _S, Res} = run_commands(?MODULE, Cmds),
-            ?WHENFAIL(io:format("history is ~p~n Res = ~p~n", [H, Res]), equals(ok, Res)),
-            ok =:= Res
-        end).
+        aggregate(command_names(Cmds),
+            begin
+                Running = [a, b, c, d, e],
+                [rafter:start_node(P, rafter_sm_echo) || P <- Running],
+                {H, S, Res} = run_commands(?MODULE, Cmds),
+                %% The sleep is to prevent badarg in gen_fsm:send_event/2 from
+                %% rafter_requester replies after the servers shut down
+                timer:sleep(1),
+                [rafter:stop_node(P) || P <- S#state.running],
+                ?WHENFAIL(io:format("history is ~p~n Res = ~p~n State = ~p~n", 
+                          [H, Res, S]), equals(ok, Res))
+            end)).
+
+%% ====================================================================
+%% eqc_statem callbacks
+%% ====================================================================
+
+initial_state() ->
+    #state{running=[a, b, c, d, e],
+           state=blank,
+           oldservers=[],
+           newservers=[],
+           to=a}.
+
+command(#state{to=To}) ->
+    oneof([{call, rafter, set_config, [To, servers()]}]).
+
+precondition(#state{running=Running}, {call, rafter, set_config, [Peer, _]}) ->
+    lists:member(Peer, Running).
+
+next_state(#state{state=blank}=S, 
+           _Result, {call, rafter, set_config, [To, Peers]}) ->
+    case lists:member(To, Peers) of
+        true ->
+            S#state{state=stable, oldservers=Peers};
+        false ->
+            S
+    end;
+
+next_state(#state{state=stable, oldservers=Old, running=Running}=S,
+            _Result, {call, rafter, set_config, [To, Peers]}) ->
+    case lists:member(To, Old) of
+        true ->
+            Config = #config{state=transitional, oldservers=Old, newservers=Peers},
+            case majority_not_running(To, Config, Running) of
+                true ->
+                    S#state{state=transitional, newservers=Peers};
+                false ->
+                    S#state{state=stable, oldservers=Peers, newservers=[]}
+            end;
+        false ->
+            %% We can't update config since we already configured ourself
+            %% out of the consensus group
+            S
+    end;
+
+next_state(S, _, _) ->
+    S.
+
+%% We have consensus and the contacted peer is a member of the group, but not the leader
+postcondition(_S, {call, rafter, set_config, [Peer, _NewServers]}, {error, {redirect, Leader}}) ->
+    rafter:get_leader(Peer) =:= Leader;
+
+%% Config set successfully
+postcondition(_S, {call, rafter, set_config, _args}, {ok, _newconfig, _id}) ->
+    true;
+
+postcondition(#state{running=Running, state=blank},
+              {call, rafter, set_config, [Peer, NewServers]}, {error, peers_not_responding}) ->
+    Config=#config{state=stable, oldservers=NewServers},
+    majority_not_running(Peer, Config, Running);
+
+postcondition(#state{running=Running, oldservers=Old, newservers=New, state=State}, 
+        {call, rafter, set_config, [Peer, _]}, {error, election_in_progress}) ->
+    Config=#config{state=State, oldservers=Old, newservers=New},
+    majority_not_running(Peer, Config, Running);
+
+postcondition(#state{running=Running, oldservers=Old, state=stable}, 
+             {call, rafter, set_config, [Peer, NewServers]}, {error, timeout, _}) ->
+    %% This is the state that the server should have set from this call should
+    %% have set before running the reconfig
+    C=#config{state=transitional, oldservers=Old, newservers=NewServers},
+    majority_not_running(Peer, C, Running);
+
+postcondition(#state{oldservers=Old, newservers=New, state=State}, 
+             {call, rafter, set_config, [Peer, _]}, {error, not_consensus_group_member}) ->
+    C=#config{state=State, oldservers=Old, newservers=New},
+    false =:= rafter_config:has_vote(Peer, C);
+        
+postcondition(#state{state=State}, {call, rafter, set_config, [_, _]}, 
+              {error, config_in_progress}) ->
+    State =:= transitional;
+
+postcondition(#state{running=Running, state=blank}, 
+        {call, rafter, set_config, [Peer, _]}, {error, invalid_initial_config}) ->
+    C = #config{state=blank},
+    majority_not_running(Peer, C, Running);
+
+postcondition(#state{oldservers=Old}, 
+              {call, rafter, set_config, [_Peer, NewServers]}, {error, not_modified}) ->
+    Old =:= NewServers.
+
+
+%% ====================================================================
+%% Internal functions
+%% ====================================================================
+
+-spec quorum_dict(peer(), list(peer())) -> dict().
+quorum_dict(Me, Servers) ->
+    dict:from_list([{S, true} || S <- lists:delete(Me, Servers)]).
 
 map_to_true(QuorumMin, Values) ->
     lists:map(fun({Key, Val}) when Val >= QuorumMin ->
@@ -102,6 +199,10 @@ map_to_true(QuorumMin, Values) ->
                     {Key, false}
               end, Values).
 
+majority_not_running(Peer, Config, Running) ->
+    Dict = quorum_dict(Peer, Running),
+    not rafter_config:quorum(Peer, Config, Dict).
+  
 %% ====================================================================
 %% EQC Generators
 %% ====================================================================
@@ -116,7 +217,7 @@ response(Me) ->
               Me =/= Server).
 
 server() ->
-    oneof([a,b,c,d,e,f,g,h,i,j,k,l,m,n,o]).
+    oneof([a,b,c,d,e,f,g,h,i]).
 
 servers() ->
     ?SUCHTHAT(Servers, oneof([three_servers(), five_servers(), seven_servers()]),
