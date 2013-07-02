@@ -1,3 +1,5 @@
+-type peer() :: atom() | {atom(), atom()}.
+
 %% Transport Independent MESSAGES
 -record(request_vote, {
             term :: non_neg_integer(),
