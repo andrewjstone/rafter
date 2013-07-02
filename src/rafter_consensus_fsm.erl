@@ -358,12 +358,18 @@ leader(#append_entries_rpy{term=Term, success=false},
 
 %% The follower is not synced yet. Try the previous entry
 leader(#append_entries_rpy{from=From, success=false}, 
-       #state{followers=Followers}=State) ->
-    NextIndex = decrement_follower_index(From, Followers),
-    NewState = State#state{followers=dict:store(From, NextIndex, Followers)},
-    LastLogIndex = rafter_log:get_last_index(?logname()),
-    maybe_send_entry(From, NextIndex, LastLogIndex, NewState),
-    {next_state, leader, NewState, ?timeout()};
+       #state{followers=Followers, config=C, me=Me}=State) ->
+       case lists:member(From, rafter_config:followers(Me, C)) of
+           true ->
+               NextIndex = decrement_follower_index(From, Followers),
+               NewState = State#state{followers=dict:store(From, NextIndex, Followers)},
+               LastLogIndex = rafter_log:get_last_index(?logname()),
+               maybe_send_entry(From, NextIndex, LastLogIndex, NewState),
+               {next_state, leader, NewState, ?timeout()};
+           false ->
+               %% This is a reply from a previous configuration. Ignore it.
+               {next_state, leader, State, ?timeout()}
+       end;
 
 %% This is a stale reply from an old request. Ignore it.
 leader(#append_entries_rpy{term=Term, success=true}, 
@@ -372,20 +378,28 @@ leader(#append_entries_rpy{term=Term, success=true},
 
 %% Success!
 leader(#append_entries_rpy{from=From, success=true, index=Index},
-       #state{followers=Followers, responses=Responses}=State) ->
-    case save_responses(dict:find(From, Responses), Index, Responses, From) of
-        %% Duplicate Index Received 
-        Responses ->
-            {next_state, leader, State, ?timeout()};
-        NewResponses ->
-            State2 = commit(NewResponses, State),
-            NextIndex = increment_follower_index(From, Followers),
-            State3 = State2#state{
-                followers=dict:store(From, NextIndex, Followers),
-                responses=NewResponses},
-            LastLogIndex = rafter_log:get_last_index(?logname()),
-            maybe_send_entry(From, NextIndex, LastLogIndex, State3),
-            {next_state, leader, State3, ?timeout()}
+       #state{followers=Followers, responses=Responses, config=C, me=Me}=State) ->
+    case lists:member(From, rafter_config:followers(Me, C)) of
+        true ->
+            case save_responses(dict:find(From, Responses), Index, Responses, From) of
+                %% Duplicate Index Received 
+                Responses ->
+                    {next_state, leader, State, ?timeout()};
+                NewResponses ->
+                    State2 = commit(NewResponses, State),
+                    case State2#state.leader of
+                        undefined ->
+                            %% We just committed a config that doesn't include ourselves
+                            {next_state, follower, State2, ?timeout()};
+                        _ ->
+                            State3 = send_next_entry(From, Followers, 
+                                                     NewResponses, State2),
+                            {next_state, leader, State3, ?timeout()}
+                    end
+            end;
+        false ->
+            %% This is a reply from a previous configuration. Ignore it.
+            {next_state, leader, State, ?timeout()}
     end;
 
 %% Ignore stale votes.
@@ -438,6 +452,15 @@ leader({op, {Id, Command }}, From,
 %%=============================================================================
 %% Internal Functions 
 %%=============================================================================
+
+send_next_entry(From, Followers, Responses, State) ->
+    NextIndex = increment_follower_index(From, Followers),
+    NewState = State#state{followers=dict:store(From, NextIndex, Followers),
+                           responses=Responses},
+    LastLogIndex = rafter_log:get_last_index(?logname()),
+    maybe_send_entry(From, NextIndex, LastLogIndex, NewState),
+    NewState.
+
 
 -spec reconfig(term(), dict(), #config{}, list(), #state{}) -> {dict(), #config{}}.
 reconfig(Me, OldFollowers, Config0, NewServers, State) ->
@@ -530,9 +553,10 @@ delete_client_req_by_index(Index, ClientRequests) ->
 %%      client requests that these commits affect. Return the new state.
 -spec commit_entries(non_neg_integer(), #state{}) -> #state{}.
 commit_entries(NewCommitIndex, #state{commit_index=CommitIndex, 
-                                      state_machine=StateMachine}=State0) ->
-   lists:foldl(fun(Index, #state{client_reqs=CliReqs}=State) ->
-       NewState = State#state{commit_index=Index},
+                                      state_machine=StateMachine}=State) ->
+   LastIndex = min(rafter_log:get_last_index(?logname()), NewCommitIndex),
+   lists:foldl(fun(Index, #state{client_reqs=CliReqs}=State1) ->
+       NewState = State1#state{commit_index=Index},
        case rafter_log:get_entry(?logname(), Index) of
 
            %% Normal Operation. Apply Command to StateMachine.
@@ -556,7 +580,7 @@ commit_entries(NewCommitIndex, #state{commit_index=CommitIndex,
                    cmd=#config{state=stable}}} ->
                maybe_send_client_reply(Index, CliReqs, NewState, NewState#state.config)
        end
-   end, State0, lists:seq(CommitIndex+1, NewCommitIndex)).
+   end, State, lists:seq(CommitIndex+1, LastIndex)).
 
 -spec stabilize_config(#config{}, #state{}) -> #state{}.
 stabilize_config(#config{state=transitional, newservers=New}=C, #state{term=Term}=S)

@@ -3,13 +3,16 @@
 -include("rafter.hrl").
 
 %% API
--export([start_node/2, op/2, set_config/2, get_leader/1]).
+-export([start_node/2, stop_node/1, op/2, set_config/2, get_leader/1]).
 
 %% Test API
 -export([start_cluster/0, start_test_node/1, test_peers/1, test/0, test_fail/0]).
 
-start_node(Me, StateMachineModule) ->
-    rafter_sup:start_peer(Me, StateMachineModule).
+start_node(Peer, StateMachineModule) ->
+    rafter_sup:start_peer(Peer, StateMachineModule).
+
+stop_node(Peer) ->
+    rafter_sup:stop_peer(Peer).
 
 %% @doc Run an operation on the backend state machine. 
 %% Note: Peer is just the local node in production.

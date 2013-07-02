@@ -47,7 +47,7 @@ quorum(Me, #config{state=transitional, oldservers=Old, newservers=New}, Response
     quorum(Me, Old, Responses) andalso quorum(Me, New, Responses);
 
 %% Responses doesn't contain a local vote which must be true if the local
-%% server is a member of the consensus group. Addd 1 to TrueResponses in
+%% server is a member of the consensus group. Add 1 to TrueResponses in
 %% this case.
 quorum(Me, Servers, Responses) ->
     TrueResponses = [R || {Peer, R} <- dict:to_list(Responses), R =:= true,

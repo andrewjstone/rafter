@@ -16,7 +16,15 @@
 
 -compile(export_all).
 
--record(state, {running = [] :: list(peer())}).
+-record(state, {running = [] :: list(peer()),
+
+                %% #config{} in an easier to match form
+                state=blank :: blank | transitional | stable,
+                oldservers=[] :: list(peer()),
+                newservers=[] :: list(peer()),
+
+                %% The peer we are communicating with during tests
+                to :: peer()}).
 
 -define(QC_OUT(P),
     eqc:on_output(fun(Str, Args) ->
@@ -32,13 +40,14 @@ eqc_test_() ->
        fun setup/0,
        fun cleanup/1,
        [%% Run the quickcheck tests
-        {timeout, 30,
+        {timeout, 120,
          ?_assertEqual(true, 
              eqc:quickcheck(
-                 ?QC_OUT(eqc:conjunction([{prop_quorum_min, 
-                                      eqc:numtests(500, prop_quorum_min())},
-                                  {prop_config,
-                                      eqc:numtests(500, prop_config())}]))))}
+                 ?QC_OUT(eqc:numtests(100, eqc:conjunction(
+                             [{prop_quorum_min, 
+                                     prop_quorum_min()},
+                              {prop_config,
+                                  prop_config()}])))))}
        ]
       }
      ]
@@ -46,8 +55,7 @@ eqc_test_() ->
 
 setup() ->
     application:start(lager),
-    application:start(rafter),
-    [rafter:start_node(S, rafter_sm_echo) || S <- [a, b, c, d, e]].
+    application:start(rafter).
 
 cleanup(_) ->
     application:stop(rafter),
@@ -73,23 +81,61 @@ prop_quorum_min() ->
 
 prop_config() ->
     ?FORALL(Cmds, commands(?MODULE),
-        begin
-            {H, S, Res} = run_commands(?MODULE, Cmds),
-            ?WHENFAIL(io:format("history is ~p~n Res = ~p~n State = ~p~n", [H, Res, S]), equals(ok, Res))
-        end).
+        aggregate(command_names(Cmds),
+            begin
+                Running = [a, b, c, d, e],
+                [rafter:start_node(P, rafter_sm_echo) || P <- Running],
+                {H, S, Res} = run_commands(?MODULE, Cmds),
+                %% The sleep is to prevent badarg in gen_fsm:send_event/2 from
+                %% rafter_requester replies after the servers shut down
+                timer:sleep(1),
+                [rafter:stop_node(P) || P <- S#state.running],
+                ?WHENFAIL(io:format("history is ~p~n Res = ~p~n State = ~p~n", 
+                          [H, Res, S]), equals(ok, Res))
+            end)).
 
 %% ====================================================================
 %% eqc_statem callbacks
 %% ====================================================================
 
 initial_state() ->
-    #state{running = [a, b, c, d, e]}.
+    #state{running=[a, b, c, d, e],
+           state=blank,
+           oldservers=[],
+           newservers=[],
+           to=a}.
 
-command(_S) ->
-    oneof([{call, rafter, set_config, [server(), servers()]}]).
+command(#state{to=To}) ->
+    oneof([{call, rafter, set_config, [To, servers()]}]).
 
 precondition(#state{running=Running}, {call, rafter, set_config, [Peer, _]}) ->
     lists:member(Peer, Running).
+
+next_state(#state{state=blank}=S, 
+           _Result, {call, rafter, set_config, [To, Peers]}) ->
+    case lists:member(To, Peers) of
+        true ->
+            S#state{state=stable, oldservers=Peers};
+        false ->
+            S
+    end;
+
+next_state(#state{state=stable, oldservers=Old, running=Running}=S,
+            _Result, {call, rafter, set_config, [To, Peers]}) ->
+    case lists:member(To, Old) of
+        true ->
+            Config = #config{state=transitional, oldservers=Old, newservers=Peers},
+            case majority_not_running(To, Config, Running) of
+                true ->
+                    S#state{state=transitional, newservers=Peers};
+                false ->
+                    S#state{state=stable, oldservers=Peers, newservers=[]}
+            end;
+        false ->
+            %% We can't update config since we already configured ourself
+            %% out of the consensus group
+            S
+    end;
 
 next_state(S, _, _) ->
     S.
@@ -102,57 +148,49 @@ postcondition(_S, {call, rafter, set_config, [Peer, _NewServers]}, {error, {redi
 postcondition(_S, {call, rafter, set_config, _args}, {ok, _newconfig, _id}) ->
     true;
 
-postcondition(#state{running=Running}, {call, rafter, set_config, [Peer, _]},
-              {error, peers_not_responding}) ->
-    Config = get_config(Peer),
+postcondition(#state{running=Running, state=blank},
+              {call, rafter, set_config, [Peer, NewServers]}, {error, peers_not_responding}) ->
+    Config=#config{state=stable, oldservers=NewServers},
     majority_not_running(Peer, Config, Running);
 
-postcondition(#state{running=Running}, {call, rafter, set_config, [Peer, _]},
-              {error, election_in_progress}) ->
-    Config = get_config(Peer),
+postcondition(#state{running=Running, oldservers=Old, newservers=New, state=State}, 
+        {call, rafter, set_config, [Peer, _]}, {error, election_in_progress}) ->
+    Config=#config{state=State, oldservers=Old, newservers=New},
     majority_not_running(Peer, Config, Running);
 
-%% We either can't reach a majority of peers or this peer is not part of the consensus group
-postcondition(#state{running=Running}, 
-             {call, rafter, set_config, [Peer, _NewServers]}, {error, timeout, _}) ->
-    C = get_config(Peer),
-    majority_not_running(Peer, C, Running); 
-
-postcondition(_S, {call, rafter, set_config, [Peer, _]}, 
-             {error, not_consensus_group_member}) ->
-    C = get_config(Peer),
-    false =:= rafter_config:has_vote(Peer, C);
-        
-postcondition(_S, {call, rafter, set_config, [Peer, _]}, {error, config_in_progress}) ->
-    C = get_config(Peer),
-    C#config.state =:= transitional;
-
-postcondition(#state{running=Running}, 
-             {call, rafter, set_config, [Peer, _]}, {error, invalid_initial_config}) ->
-    #config{state=blank}=C =  get_config(Peer),
+postcondition(#state{running=Running, oldservers=Old, state=stable}, 
+             {call, rafter, set_config, [Peer, NewServers]}, {error, timeout, _}) ->
+    %% This is the state that the server should have set from this call should
+    %% have set before running the reconfig
+    C=#config{state=transitional, oldservers=Old, newservers=NewServers},
     majority_not_running(Peer, C, Running);
 
-postcondition(#state{}, 
-              {call, rafter, set_config, [Peer, NewServers]}, {error, not_modified}) ->
-    C = get_config(Peer),
-    C#config.oldservers =:= NewServers.
+postcondition(#state{oldservers=Old, newservers=New, state=State}, 
+             {call, rafter, set_config, [Peer, _]}, {error, not_consensus_group_member}) ->
+    C=#config{state=State, oldservers=Old, newservers=New},
+    false =:= rafter_config:has_vote(Peer, C);
+        
+postcondition(#state{state=State}, {call, rafter, set_config, [_, _]}, 
+              {error, config_in_progress}) ->
+    State =:= transitional;
+
+postcondition(#state{running=Running, state=blank}, 
+        {call, rafter, set_config, [Peer, _]}, {error, invalid_initial_config}) ->
+    C = #config{state=blank},
+    majority_not_running(Peer, C, Running);
+
+postcondition(#state{oldservers=Old}, 
+              {call, rafter, set_config, [_Peer, NewServers]}, {error, not_modified}) ->
+    Old =:= NewServers.
 
 
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
 
--spec get_config(atom()) -> atom().
-get_config(Name) ->
-    rafter_log:get_config(logname(Name)).
-
--spec logname(atom()) -> atom().
-logname(FsmName) ->
-    list_to_atom(atom_to_list(FsmName) ++ "_log").
-
--spec quorum_dict(list(peer())) -> dict().
-quorum_dict(Servers) ->
-    dict:from_list([{S, true} || S <- Servers]).
+-spec quorum_dict(peer(), list(peer())) -> dict().
+quorum_dict(Me, Servers) ->
+    dict:from_list([{S, true} || S <- lists:delete(Me, Servers)]).
 
 map_to_true(QuorumMin, Values) ->
     lists:map(fun({Key, Val}) when Val >= QuorumMin ->
@@ -162,7 +200,7 @@ map_to_true(QuorumMin, Values) ->
               end, Values).
 
 majority_not_running(Peer, Config, Running) ->
-    Dict = quorum_dict(Running),
+    Dict = quorum_dict(Peer, Running),
     not rafter_config:quorum(Peer, Config, Dict).
   
 %% ====================================================================
