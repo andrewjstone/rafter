@@ -6,7 +6,8 @@
 -export([start_node/2, stop_node/1, op/2, set_config/2, get_leader/1]).
 
 %% Test API
--export([start_cluster/0, start_test_node/1, test_peers/1, test/0, test_fail/0]).
+-export([start_cluster/0, start_test_node/1, start_nodes/1,
+         test_peers/1]).
 
 start_node(Peer, StateMachineModule) ->
     rafter_sup:start_peer(Peer, StateMachineModule).
@@ -32,21 +33,8 @@ get_leader(Peer) ->
 %% Test Functions
 %% =============================================
 
-test() ->
-    application:start(lager),
-    application:start(rafter),
-    [rafter:start_node(P, rafter_sm_echo) || P <- [a, b, c, d, e]].
-
-test_fail() ->
-    application:start(lager),
-    application:start(rafter),
-    [rafter:start_node(P, rafter_sm_echo) || P <- [a, b, c, d, e]],
-    rafter:set_config(e,[g,a,i,b,c]),
-    rafter:set_config(e,[e,f,i]),
-    rafter:set_config(a,[c,a,h]),
-    rafter:set_config(b,[g,i,b]),
-    rafter:set_config(c,[f,e,h,c,i]),
-    rafter:set_config(a,[c,e,b,a,g]).
+start_nodes(Peers) ->
+    [rafter_sup:start_peer(P, rafter_sm_echo) || P <- Peers].
 
 start_cluster() ->
     application:start(lager),
