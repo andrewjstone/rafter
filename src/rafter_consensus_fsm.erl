@@ -510,11 +510,11 @@ append(Id, From, Entry,
                                 timer=Timer},
     State#state{client_reqs=[ClientRequest | Reqs]}.
 
-send_client_timeout_reply(#client_req{from=From, id=Id}) ->
-    gen_fsm:reply(From, {error, timeout, Id}).
+send_client_timeout_reply(#client_req{from=From}) ->
+    gen_fsm:reply(From, {error, timeout}).
 
-send_client_reply(#client_req{from=From, id=Id}, Result) ->
-    gen_fsm:reply(From, {ok, Result, Id}).
+send_client_reply(#client_req{from=From}, Result) ->
+    gen_fsm:reply(From, {ok, Result}).
 
 find_client_req(Id, ClientRequests) ->
     Result = lists:filter(fun(Req) ->

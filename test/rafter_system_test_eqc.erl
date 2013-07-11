@@ -41,7 +41,7 @@ eqc_test_() ->
         {timeout, 120,
          ?_assertEqual(true, 
              eqc:quickcheck(
-                 ?QC_OUT(eqc:numtests(100, prop_rafter()))))}
+                 ?QC_OUT(eqc:numtests(20, prop_rafter()))))}
        ]
       }
      ]
@@ -88,8 +88,8 @@ command(#state{state=init}) ->
 command(#state{state=blank, to=To, running=Running}) ->
     {call, rafter, set_config, [To, Running]};
 
-command(#state{state=stable, to=To, oldservers=Old}) ->
-    {call, rafter, op, [To, Old]}.
+command(#state{state=stable, to=To}) ->
+    {call, rafter, op, [To, command()]}.
 
 precondition(#state{}, _SymCall) ->
     true.
@@ -117,8 +117,23 @@ next_state(#state{state=stable, leader=undefined, to=To}=S, {ok, _},
 next_state(S, _, _) ->
     S.
 
-postcondition(_S, {call, rafter, _Fun, _Args}, _Res) ->
-    true.
+postcondition(#state{state=init}, {call, rafter, start_nodes, _},
+    {ok, _}) ->
+        true;
+postcondition(#state{state=blank}, {call, rafter, set_config, [To, Servers]},
+    {ok, _}) ->
+        lists:member(To, Servers);
+
+postcondition(#state{state=stable, oldservers=Servers, to=To, leader=L}, 
+    {call, rafter, op, [To, _]}, {ok, _}) ->
+        ?assert(lists:member(To, Servers)),
+        L =:= undefined orelse L =:= To;
+postcondition(#state{state=stable, to=To}, {call, rafter, op, [To, _]},
+    {redirect, Leader}) ->
+        Leader =/= To;
+postcondition(#state{state=stable, to=To}, {call, rafter, op, [To, _]},
+    {error, _}) ->
+        true.
 
 %% to is always a running server
 invariant(#state{to=undefined}) ->
@@ -133,6 +148,12 @@ invariant(#state{to=To, running=Running}) ->
 %% ====================================================================
 %% EQC Generators
 %% ====================================================================
+
+%% Commands for a hypothetical backend. Tested with rafter_sm_echo backend.
+%% This module is here to test consensus, not the operational capabilities 
+%% of the backend.
+command() ->
+    oneof(["inc key val", "get key", "set key val", "keyspace", "config"]).
 
 server() ->
     oneof([a,b,c,d,e,f,g,h,i]).

@@ -34,7 +34,9 @@ get_leader(Peer) ->
 %% =============================================
 
 start_nodes(Peers) ->
-    [rafter_sup:start_peer(P, rafter_sm_echo) || P <- Peers].
+    Status = [rafter_sup:start_peer(P, rafter_sm_echo) || P <- Peers],
+    Pids = [P || {ok, P} <- Status],
+    {ok, Pids}.
 
 start_cluster() ->
     application:start(lager),
