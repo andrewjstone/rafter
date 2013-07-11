@@ -18,7 +18,7 @@
 
 -record(state, {to :: atom(),
                 running=[] :: list(atom()),
-                state=blank :: blank | transitional | stable,
+                state :: init | blank | transitional | stable,
                 oldservers=[] :: list(atom()),
                 newservers=[] :: list(atom()),
                 leader=undefined :: atom()}).
@@ -77,22 +77,45 @@ prop_rafter() ->
 initial_state() ->
     #state{to=undefined,
            running=[],
-           state=blank,
+           state=init,
            oldservers=[],
            newservers=[],
            leader=undefined}.
 
-command(#state{state=blank}) ->
+command(#state{state=init}) ->
     {call, rafter, start_nodes, [servers()]};
-command(_S) ->
-    {call, erlang, now, []}.
+
+command(#state{state=blank, to=To, running=Running}) ->
+    {call, rafter, set_config, [To, Running]};
+
+command(#state{state=stable, to=To, oldservers=Old}) ->
+    {call, rafter, op, [To, Old]}.
 
 precondition(#state{}, _SymCall) ->
     true.
 
-next_state(#state{state=blank}=S, _, 
-  {call, rafter, start_nodes, [Running]}) ->
-     S#state{running=Running, to=lists:nth(1, Running)}.
+next_state(#state{state=init}=S, _, 
+    {call, rafter, start_nodes, [Running]}) ->
+        S#state{state=blank, running=Running, to=lists:nth(1, Running)};
+
+%% The initial config is always just the running servers
+next_state(#state{state=blank, to=To, running=Running}=S, _,
+    {call, rafter, set_config, [To, Running]}) ->
+        S#state{state=stable, oldservers=Running};
+
+next_state(#state{state=stable, to=To, leader=undefined}=S, 
+    {redirect, Leader}, {call, rafter, op, [To, _Command]}) ->
+        S#state{leader=Leader, to=Leader};
+
+next_state(#state{state=stable}=S, {error, _}, {call, rafter, op, _}) ->
+    S;
+
+next_state(#state{state=stable, leader=undefined, to=To}=S, {ok, _}, 
+    {call, rafter, op, _}) ->
+        S#state{leader=To};
+
+next_state(S, _, _) ->
+    S.
 
 postcondition(_S, {call, rafter, _Fun, _Args}, _Res) ->
     true.
