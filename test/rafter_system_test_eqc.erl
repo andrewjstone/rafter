@@ -24,7 +24,10 @@
                       state=init :: init | blank | transitional | stable,
                       oldservers=[] :: list(atom()),
                       newservers=[] :: list(atom()),
+                      commit_index=0 :: non_neg_integer(),
                       leader :: atom(),
+
+                      %% This is the actual state of the leader
                       prev_leader_state=#state{} :: #state{},
                       leader_state=#state{} :: #state{}}).
 
@@ -102,7 +105,7 @@ next_state(#model_state{state=init}=S, _,
 %% The initial config is always just the running servers
 next_state(#model_state{state=blank, to=To, running=Running}=S, _,
     {call, rafter, set_config, [To, Running]}) ->
-        S#model_state{state=stable, oldservers=Running};
+        S#model_state{state=stable, oldservers=Running, commit_index=1};
 
 next_state(#model_state{state=stable, to=To, leader=undefined}=S, 
     {redirect, Leader}, {call, rafter, op, [To, _Command]}) ->
@@ -111,9 +114,13 @@ next_state(#model_state{state=stable, to=To, leader=undefined}=S,
 next_state(#model_state{state=stable}=S, {error, _}, {call, rafter, op, _}) ->
     S;
 
-next_state(#model_state{state=stable, leader=undefined, to=To}=S, {ok, _}, 
-    {call, rafter, op, _}) ->
-        S#model_state{leader=To};
+next_state(#model_state{state=stable, leader=To, to=To, commit_index=CI}=S, 
+    {ok, _}, {call, rafter, op, _}) ->
+        S#model_state{commit_index=CI+1};
+
+next_state(#model_state{state=stable, leader=undefined, to=To, commit_index=CI}=S, 
+    {ok, _}, {call, rafter, op, _}) ->
+        S#model_state{leader=To, commit_index=CI+1};
 
 next_state(#model_state{state=stable, leader=undefined, to=To, leader_state=LeaderState}=S,
     {ok, NewLeaderState}, {call, rafter, get_state, []}) ->
@@ -163,8 +170,10 @@ term_invariants(#model_state{prev_leader_state=Prev, leader_state=Curr}) ->
 term_invariants(_) ->
     true.
 
-commit_index_is_monotonic(#model_state{prev_leader_state=Prev, leader_state=Curr}) ->
-    Curr#state.commit_index >= Prev#state.commit_index.
+commit_index_is_monotonic(#model_state{prev_leader_state=Prev, 
+    leader_state=Curr, commit_index=CI}) ->
+        ?assert(CI >= Curr#state.commit_index),
+        Curr#state.commit_index >= Prev#state.commit_index.
 
 current_term_is_monotonic(#model_state{prev_leader_state=Prev, leader_state=Curr}) ->
     Curr#state.term >= Prev#state.term.
