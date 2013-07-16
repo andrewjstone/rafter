@@ -96,6 +96,8 @@ command(#model_state{state=stable, to=To, running=Running}) ->
                {50, {call, rafter, get_state, [To]}},
                {1, {call, rafter, stop_node, [oneof(Running)]}}]).
 
+precondition(#model_state{running=[]}, {call, rafter, stop_node, _}) ->
+    false;
 precondition(#model_state{}, _SymCall) ->
     true.
 
