@@ -91,9 +91,10 @@ command(#model_state{state=init}) ->
 command(#model_state{state=blank, to=To, running=Running}) ->
     {call, rafter, set_config, [To, Running]};
 
-command(#model_state{state=stable, to=To}) ->
-    oneof([{call, rafter, op, [To, command()]},
-           {call, rafter, get_state, [To]}]).
+command(#model_state{state=stable, to=To, running=Running}) ->
+    frequency([{100, {call, rafter, op, [To, command()]}},
+               {50, {call, rafter, get_state, [To]}},
+               {1, {call, rafter, stop_node, [oneof(Running)]}}]).
 
 precondition(#model_state{}, _SymCall) ->
     true.
@@ -130,6 +131,17 @@ next_state(#model_state{state=stable, leader=To, to=To, leader_state=LeaderState
     {ok, NewLeaderState}, {call, rafter, get_state, []}) ->
         S#model_state{prev_leader_state=LeaderState, leader_state=NewLeaderState};
 
+next_state(#model_state{state=stable, leader=L, running=Running}=S, ok, 
+    {call, rafter, stop_node, [Node]}) -> 
+        case L of
+            Node ->
+                NewRunning = lists:delete(Node, Running),
+                S#model_state{leader=undefined, running=NewRunning, 
+                              to=lists:nth(1, NewRunning)};
+            _ ->
+                S#model_state{running=lists:delete(Node, Running)}
+        end;
+
 next_state(S, _, _) ->
     S.
 
@@ -151,6 +163,10 @@ postcondition(#model_state{state=stable, to=To}, {call, rafter, op, [To, _]},
         Leader =/= To;
 postcondition(#model_state{state=stable, to=To}, {call, rafter, op, [To, _]},
     {error, _}) ->
+        true;
+
+postcondition(#model_state{state=stable}, 
+    {call, rafter, stop_node, [_Node]}, ok) ->
         true.
 
 invariant(State) ->
