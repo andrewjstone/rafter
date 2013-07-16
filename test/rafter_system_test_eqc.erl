@@ -14,14 +14,19 @@
 
 -include("rafter.hrl").
 
+%% This file includes #state{}
+-include("rafter_consensus_fsm.hrl").
+
 -compile(export_all).
 
--record(state, {to :: atom(),
-                running=[] :: list(atom()),
-                state :: init | blank | transitional | stable,
-                oldservers=[] :: list(atom()),
-                newservers=[] :: list(atom()),
-                leader=undefined :: atom()}).
+-record(model_state, {to :: atom(),
+                      running=[] :: list(atom()),
+                      state=init :: init | blank | transitional | stable,
+                      oldservers=[] :: list(atom()),
+                      newservers=[] :: list(atom()),
+                      leader :: atom(),
+                      prev_leader_state=#state{} :: #state{},
+                      leader_state=#state{} :: #state{}}).
 
 -define(QC_OUT(P),
     eqc:on_output(fun(Str, Args) ->
@@ -67,7 +72,7 @@ prop_rafter() ->
                 Val = ?WHENFAIL(io:format("history is ~p~n Res = ~p~n State = ~p~n", 
                           [H, Res, S]), equals(ok, Res)),
                 timer:sleep(1),
-                [rafter:stop_node(P) || P <- S#state.running],
+                [rafter:stop_node(P) || P <- S#model_state.running],
                 Val
             end)).
 
@@ -75,75 +80,99 @@ prop_rafter() ->
 %% eqc_statem callbacks
 %% ====================================================================
 initial_state() ->
-    #state{to=undefined,
-           running=[],
-           state=init,
-           oldservers=[],
-           newservers=[],
-           leader=undefined}.
+    #model_state{}.
 
-command(#state{state=init}) ->
+command(#model_state{state=init}) ->
     {call, rafter, start_nodes, [servers()]};
 
-command(#state{state=blank, to=To, running=Running}) ->
+command(#model_state{state=blank, to=To, running=Running}) ->
     {call, rafter, set_config, [To, Running]};
 
-command(#state{state=stable, to=To}) ->
-    {call, rafter, op, [To, command()]}.
+command(#model_state{state=stable, to=To}) ->
+    oneof([{call, rafter, op, [To, command()]},
+           {call, rafter, get_state, [To]}]).
 
-precondition(#state{}, _SymCall) ->
+precondition(#model_state{}, _SymCall) ->
     true.
 
-next_state(#state{state=init}=S, _, 
+next_state(#model_state{state=init}=S, _, 
     {call, rafter, start_nodes, [Running]}) ->
-        S#state{state=blank, running=Running, to=lists:nth(1, Running)};
+        S#model_state{state=blank, running=Running, to=lists:nth(1, Running)};
 
 %% The initial config is always just the running servers
-next_state(#state{state=blank, to=To, running=Running}=S, _,
+next_state(#model_state{state=blank, to=To, running=Running}=S, _,
     {call, rafter, set_config, [To, Running]}) ->
-        S#state{state=stable, oldservers=Running};
+        S#model_state{state=stable, oldservers=Running};
 
-next_state(#state{state=stable, to=To, leader=undefined}=S, 
+next_state(#model_state{state=stable, to=To, leader=undefined}=S, 
     {redirect, Leader}, {call, rafter, op, [To, _Command]}) ->
-        S#state{leader=Leader, to=Leader};
+        S#model_state{leader=Leader, to=Leader};
 
-next_state(#state{state=stable}=S, {error, _}, {call, rafter, op, _}) ->
+next_state(#model_state{state=stable}=S, {error, _}, {call, rafter, op, _}) ->
     S;
 
-next_state(#state{state=stable, leader=undefined, to=To}=S, {ok, _}, 
+next_state(#model_state{state=stable, leader=undefined, to=To}=S, {ok, _}, 
     {call, rafter, op, _}) ->
-        S#state{leader=To};
+        S#model_state{leader=To};
+
+next_state(#model_state{state=stable, leader=undefined, to=To, leader_state=LeaderState}=S,
+    {ok, NewLeaderState}, {call, rafter, get_state, []}) ->
+        S#model_state{leader=To, prev_leader_state=LeaderState, leader_state=NewLeaderState};
+
+next_state(#model_state{state=stable, leader=To, to=To, leader_state=LeaderState}=S, 
+    {ok, NewLeaderState}, {call, rafter, get_state, []}) ->
+        S#model_state{prev_leader_state=LeaderState, leader_state=NewLeaderState};
 
 next_state(S, _, _) ->
     S.
 
-postcondition(#state{state=init}, {call, rafter, start_nodes, _},
+postcondition(#model_state{state=init}, {call, rafter, start_nodes, _},
     {ok, _}) ->
         true;
-postcondition(#state{state=blank}, {call, rafter, set_config, [To, Servers]},
+postcondition(#model_state{state=blank}, {call, rafter, set_config, [To, Servers]},
     {ok, _}) ->
         lists:member(To, Servers);
 
-postcondition(#state{state=stable, oldservers=Servers, to=To, leader=L}, 
+postcondition(#model_state{state=stable}, {call, rafter, get_state, [_To]}, {ok, _}) ->
+    true;
+postcondition(#model_state{state=stable, oldservers=Servers, to=To, leader=L}, 
     {call, rafter, op, [To, _]}, {ok, _}) ->
         ?assert(lists:member(To, Servers)),
         L =:= undefined orelse L =:= To;
-postcondition(#state{state=stable, to=To}, {call, rafter, op, [To, _]},
+postcondition(#model_state{state=stable, to=To}, {call, rafter, op, [To, _]},
     {redirect, Leader}) ->
         Leader =/= To;
-postcondition(#state{state=stable, to=To}, {call, rafter, op, [To, _]},
+postcondition(#model_state{state=stable, to=To}, {call, rafter, op, [To, _]},
     {error, _}) ->
         true.
 
-%% to is always a running server
-invariant(#state{to=undefined}) ->
-    true;
-invariant(#state{to=To, running=Running}) ->
-    lists:member(To, Running).
+invariant(State) ->
+    commit_index_is_monotonic(State) andalso
+    current_term_is_monotonic(State) andalso
+    to_is_a_running_server(State) andalso
+    term_invariants(State).
+
 
 %% ====================================================================
-%% Internal functions
+%% Invariants 
 %% ====================================================================
+
+%% These are invaraints for the same term
+term_invariants(#model_state{prev_leader_state=Prev, leader_state=Curr}) ->
+    Prev#state.leader =:= Curr#state.leader;
+term_invariants(_) ->
+    true.
+
+commit_index_is_monotonic(#model_state{prev_leader_state=Prev, leader_state=Curr}) ->
+    Curr#state.commit_index >= Prev#state.commit_index.
+
+current_term_is_monotonic(#model_state{prev_leader_state=Prev, leader_state=Curr}) ->
+    Curr#state.term >= Prev#state.term.
+
+to_is_a_running_server(#model_state{to=undefined}) ->
+    true;
+to_is_a_running_server(#model_state{to=To, running=Running}) ->
+    lists:member(To, Running).
 
 %% ====================================================================
 %% EQC Generators

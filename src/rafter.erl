@@ -1,9 +1,11 @@
 -module(rafter).
 
 -include("rafter.hrl").
+-include("rafter_consensus_fsm.hrl").
 
 %% API
--export([start_node/2, stop_node/1, op/2, set_config/2, get_leader/1]).
+-export([start_node/2, stop_node/1, op/2, set_config/2, 
+         get_state/1, get_leader/1]).
 
 %% Test API
 -export([start_cluster/0, start_test_node/1, start_nodes/1,
@@ -24,6 +26,11 @@ op(Peer, Command) ->
 set_config(Peer, NewServers) ->
     Id = druuid:v4(),
     rafter_consensus_fsm:set_config(Peer, {Id, NewServers}).
+
+%% @doc Retrieve the system state of the corresponding fsm
+-spec get_state(peer()) -> #state{}.
+get_state(Peer) ->
+    rafter_consensus_fsm:get_state(Peer).
 
 -spec get_leader(peer()) -> peer() | undefined.
 get_leader(Peer) ->
