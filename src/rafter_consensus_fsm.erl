@@ -14,7 +14,7 @@
 
 %% API
 -export([start/0, stop/1, start/1, start_link/3, leader/1, op/2, set_config/2,
-         send/2, send_sync/2]).
+         send/2, send_sync/2, get_state/1]).
 
 %% gen_fsm callbacks
 -export([init/1, code_change/4, handle_event/3, handle_info/3,
@@ -46,6 +46,9 @@ leader(Peer) ->
 
 op(Peer, Command) ->
     gen_fsm:sync_send_event(Peer, {op, Command}).
+
+get_state(Peer) ->
+    gen_fsm:sync_send_all_state_event(Peer, get_state, 100).
 
 set_config(Peer, Config) ->
     gen_fsm:sync_send_event(Peer, {set_config, Config}).
@@ -86,6 +89,8 @@ handle_event(stop, _, State) ->
 handle_event(_Event, _StateName, State) ->
     {stop, {error, badmsg}, State}.
 
+handle_sync_event(get_state, _From, StateName, State) ->
+    {reply, State, StateName, State, ?timeout()};
 handle_sync_event(get_leader, _From, StateName, State) ->
     {reply, State#state.leader, StateName, State, ?timeout()};
 handle_sync_event(_Event, _From, _StateName, State) ->
@@ -510,11 +515,11 @@ append(Id, From, Entry,
                                 timer=Timer},
     State#state{client_reqs=[ClientRequest | Reqs]}.
 
-send_client_timeout_reply(#client_req{from=From, id=Id}) ->
-    gen_fsm:reply(From, {error, timeout, Id}).
+send_client_timeout_reply(#client_req{from=From}) ->
+    gen_fsm:reply(From, {error, timeout}).
 
-send_client_reply(#client_req{from=From, id=Id}, Result) ->
-    gen_fsm:reply(From, {ok, Result, Id}).
+send_client_reply(#client_req{from=From}, Result) ->
+    gen_fsm:reply(From, {ok, Result}).
 
 find_client_req(Id, ClientRequests) ->
     Result = lists:filter(fun(Req) ->
