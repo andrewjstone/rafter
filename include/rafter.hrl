@@ -34,12 +34,17 @@
             success :: boolean()}).
 
 -record(rafter_entry, {
-        type :: config | atom(),
+        type :: config | op,
         term :: non_neg_integer(),
+        index :: non_neg_integer(),
         cmd :: term()}).
 
+-record(meta, {
+    voted_for :: peer(),
+    term = 0 :: non_neg_integer()}).
+
 -record(config, {
-    state :: 
+    state = blank :: 
         %% The configuration specifies no servers. Servers that are new to the
         %% cluster and have empty logs start in this state.
         blank   | 

@@ -19,5 +19,5 @@ send(To, From, Msg) ->
                       rafter_consensus_fsm:send(From, Rpy);
                   E ->
                       lager:error("Error sending ~p to To ~p: ~p", [Msg, To, E])
-                  end
+              end
           end).

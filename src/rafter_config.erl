@@ -10,7 +10,7 @@
 %% API
 %%====================================================================
 
--spec quorum_min(term(), #config{} | list(), dict()) -> non_neg_integer().
+-spec quorum_min(term(), #config{}, dict()) -> non_neg_integer().
 quorum_min(_Me, #config{state=blank}, _) ->
     0;
 quorum_min(Me, #config{state=stable, oldservers=OldServers}, Responses) ->

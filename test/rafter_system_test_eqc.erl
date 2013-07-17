@@ -13,6 +13,7 @@
          precondition/2]).
 
 -include("rafter.hrl").
+-include("rafter_opts.hrl").
 
 %% This file includes #state{}
 -include("rafter_consensus_fsm.hrl").
@@ -25,15 +26,14 @@
                       oldservers=[] :: list(atom()),
                       newservers=[] :: list(atom()),
                       commit_index=0 :: non_neg_integer(),
-                      leader :: atom(),
+                      leader :: atom()}).
 
-                      %% This is the actual state of the leader
-                      prev_leader_state=#state{} :: #state{},
-                      leader_state=#state{} :: #state{}}).
 
 -define(QC_OUT(P),
     eqc:on_output(fun(Str, Args) ->
                 io:format(user, Str, Args) end, P)).
+
+-define(logdir, "./rafter_logs").
 
 %% ====================================================================
 %% Tests
@@ -55,7 +55,12 @@ eqc_test_() ->
      ]
     }.
 
+%% ====================================================================
+%% Helper functions
+%% ====================================================================
 setup() ->
+    os:cmd(["rm -rf ", ?logdir]),
+    os:cmd(["mkdir ", ?logdir]),
     application:start(lager),
     application:start(rafter).
 
@@ -63,21 +68,36 @@ cleanup(_) ->
     application:stop(rafter),
     application:stop(lager).
 
+run_prop(Cmds) ->
+        aggregate(command_names(Cmds), run_print_cleanup(Cmds)).
+
+run_print_cleanup(Cmds) ->
+    {H, S, Res} = run_commands(?MODULE, Cmds),
+    eqc_statem:pretty_commands(?MODULE, 
+        Cmds, 
+        {H, S, Res}, 
+        cleanup_test(S, Res)).
+
+cleanup_test(S, Res) ->
+    [rafter:stop_node(P) || P <- S#model_state.running],
+    os:cmd(["rm -rf ", ?logdir]),
+    os:cmd(["mkdir ", ?logdir]),
+    ok =:= Res.
+
+start_node(Peer) ->
+    Opts = #rafter_opts{logdir=?logdir},
+    rafter:start_node(Peer, Opts).
+
+start_nodes(Peers) ->
+    [start_node(P) || P <- Peers].
+
 %% ====================================================================
 %% EQC Properties
 %% ====================================================================
 
 prop_rafter() ->
-    ?FORALL(Cmds, commands(?MODULE),
-        aggregate(command_names(Cmds),
-            begin
-                {H, S, Res} = run_commands(?MODULE, Cmds),
-                Val = ?WHENFAIL(io:format("history is ~p~n Res = ~p~n State = ~p~n", 
-                          [H, Res, S]), equals(ok, Res)),
-                timer:sleep(1),
-                [rafter:stop_node(P) || P <- S#model_state.running],
-                Val
-            end)).
+    ?FORALL(Cmds, more_commands(5, commands(?MODULE)), run_prop(Cmds)).
+
 
 %% ====================================================================
 %% eqc_statem callbacks
@@ -86,14 +106,18 @@ initial_state() ->
     #model_state{}.
 
 command(#model_state{state=init}) ->
-    {call, rafter, start_nodes, [servers()]};
+    {call, ?MODULE, start_nodes, [servers()]};
 
 command(#model_state{state=blank, to=To, running=Running}) ->
     {call, rafter, set_config, [To, Running]};
 
+command(#model_state{state=stable, oldservers=Old, running=Running})
+  when length(Running) =< (length(Old) div 2) ->
+    NodeToStart = oneof(lists:subtract(Old, Running)),
+    {call, rafter, start_node, [NodeToStart]};
+
 command(#model_state{state=stable, to=To, running=Running}) ->
     frequency([{100, {call, rafter, op, [To, command()]}},
-               {50, {call, rafter, get_state, [To]}},
                {1, {call, rafter, stop_node, [oneof(Running)]}}]).
 
 precondition(#model_state{state=init}, _) ->
@@ -108,42 +132,26 @@ precondition(#model_state{running=Running}, {call, rafter, set_config, [To, _]})
     lists:member(To, Running).
 
 next_state(#model_state{state=init}=S, _, 
-    {call, rafter, start_nodes, [Running]}) ->
-        S#model_state{state=blank, running=Running, to=lists:nth(1, Running)};
+    {call, ?MODULE, start_nodes, [Running]}) ->
+        Leader = lists:nth(1, Running),
+        S#model_state{state=blank, running=Running, to=Leader, leader=Leader};
 
 %% The initial config is always just the running servers
-next_state(#model_state{state=blank, to=To, running=Running}=S, _,
-    {call, rafter, set_config, [To, Running]}) ->
-        S#model_state{state=stable, oldservers=Running, commit_index=1, 
-                      leader=To};
+next_state(#model_state{state=blank, to=To, running=Running}=S, 
+    _Result, {call, rafter, set_config, [To, Running]}) ->
+        S#model_state{commit_index=1, state=stable, oldservers=Running};
 
-next_state(#model_state{state=stable}=S, {error, _}, {call, rafter, op, _}) ->
-    S;
+next_state(#model_state{state=stable, commit_index=CI, leader=Leader}=S, 
+  Result, {call, rafter, op, _}) ->
+      S#model_state{commit_index={call, ?MODULE, maybe_increment, [CI, Result]},
+                    leader={call, ?MODULE, get_leader, [Leader, Result]}};
 
-next_state(#model_state{state=stable, leader=undefined, to=To, commit_index=CI}=S, 
-    _, {call, rafter, op, _}) ->
-        S#model_state{leader=To, commit_index=CI+1};
-
-next_state(#model_state{state=stable, leader=To, to=To, commit_index=CI}=S, 
-    _, {call, rafter, op, _}) ->
-        S#model_state{commit_index=CI+1};
-
-next_state(#model_state{state=stable, leader=undefined, to=To, leader_state=LeaderState}=S,
-    NewLeaderState, {call, rafter, get_state, _}) ->
-        S#model_state{leader=To, prev_leader_state=LeaderState, leader_state=NewLeaderState};
-
-next_state(#model_state{state=stable, leader=To, to=To, leader_state=LeaderState}=S, 
-    NewLeaderState, {call, rafter, get_state, _}) ->
-        S#model_state{prev_leader_state=LeaderState, leader_state=NewLeaderState};
-
-next_state(#model_state{state=stable, to=To, running=Running}=S, _, 
-    {call, rafter, stop_node, [Node]}) -> 
+next_state(#model_state{state=stable, to=To, running=Running}=S, 
+    _Result, {call, rafter, stop_node, [Node]}) -> 
         NewRunning = lists:delete(Node, Running),
         case To of
             Node ->
-                S#model_state{leader=undefined, 
-                              leader_state=#state{}, 
-                              prev_leader_state=#state{}, 
+                S#model_state{leader=unknown,
                               running=NewRunning, 
                               to=lists:nth(1, NewRunning)};
             _ ->
@@ -151,64 +159,54 @@ next_state(#model_state{state=stable, to=To, running=Running}=S, _,
         end.
 
 
-postcondition(#model_state{state=init}, {call, rafter, start_nodes, _},
-    {ok, _}) ->
-        true;
-postcondition(#model_state{state=blank}, {call, rafter, set_config, [To, Servers]},
-    {ok, _}) ->
-        lists:member(To, Servers);
-
-postcondition(#model_state{state=stable}, {call, rafter, get_state, [_To]}, _) ->
+postcondition(#model_state{state=init}, {call, ?MODULE, start_nodes, _}, _) ->
     true;
-postcondition(#model_state{state=stable, oldservers=Servers, to=To, leader=L}, 
-    {call, rafter, op, [To, _]}, {ok, _}) ->
-        ?assert(lists:member(To, Servers)),
-        L =:= undefined orelse L =:= To;
+postcondition(#model_state{state=blank}, 
+  {call, rafter, set_config, [_To, _Servers]}, {ok, _}) ->
+    true;
+
+postcondition(#model_state{state=stable, oldservers=Servers, to=To}, 
+  {call, rafter, op, [To, _]}, {ok, _}) ->
+    true =:= lists:member(To, Servers);
 postcondition(#model_state{state=stable, to=To}, {call, rafter, op, [To, _]},
-    {redirect, Leader}) ->
+    {error, {redirect, Leader}}) ->
         Leader =/= To;
 postcondition(#model_state{state=stable, to=To}, {call, rafter, op, [To, _]},
-    {error, _}) ->
+    {error, election_in_progress}) ->
         true;
 
 postcondition(#model_state{state=stable}, 
     {call, rafter, stop_node, [_Node]}, ok) ->
         true.
 
-invariant(State) ->
-    commit_index_is_monotonic(State) andalso
-    current_term_is_monotonic(State) andalso
-    to_is_a_running_server(State) andalso
-    term_invariants(State).
+invariant(ModelState=#model_state{to=To, state=stable}) ->
+    State = rafter:get_state(To), 
+    commit_indexes_monotonic(ModelState, State);
+invariant(_) ->
+    true.
 
+%% ====================================================================
+%% Helper Functions
+%% ====================================================================
+
+maybe_increment(CommitIndex, {ok, _}) ->
+    CommitIndex + 1;
+maybe_increment(CommitIndex, {error, _}) ->
+    CommitIndex.
+
+get_leader(Leader, {ok, _}) ->
+    Leader;
+get_leader(_Leader, {error, {redirect, NewLeader}}) ->
+    NewLeader;
+get_leader(_Leader, {error, _}) ->
+    unknown.
 
 %% ====================================================================
 %% Invariants 
 %% ====================================================================
 
-%% These are invaraints for the same term
-term_invariants(#model_state{state=stable, prev_leader_state=Prev, leader_state=Curr}) 
-    when Prev#state.term =/= 0 ->
-        ?assert(Prev#state.leader =:= Curr#state.leader),
-        true;
-term_invariants(_) ->
-    true.
-
-commit_index_is_monotonic(#model_state{prev_leader_state=Prev, 
-    leader_state=Curr, commit_index=CI}) ->
-        ?assert(CI >= Curr#state.commit_index),
-        ?assert(Curr#state.commit_index >= Prev#state.commit_index),
-        true.
-
-current_term_is_monotonic(#model_state{prev_leader_state=Prev, leader_state=Curr}) ->
-    ?assert(Curr#state.term >= Prev#state.term),
-    true.
-
-to_is_a_running_server(#model_state{to=undefined}) ->
-    true;
-to_is_a_running_server(#model_state{to=To, running=Running}) ->
-    ?assert(lists:member(To, Running)),
-    true.
+commit_indexes_monotonic(#model_state{commit_index=CI}, State) ->
+    State#state.commit_index =< CI.
 
 %% ====================================================================
 %% EQC Generators

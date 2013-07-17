@@ -13,6 +13,7 @@
          precondition/2]).
 
 -include("rafter.hrl").
+-include("rafter_opts.hrl").
 
 -compile(export_all).
 
@@ -25,6 +26,8 @@
 
                 %% The peer we are communicating with during tests
                 to :: peer()}).
+
+-define(logdir, "./rafter_logs").
 
 -define(QC_OUT(P),
     eqc:on_output(fun(Str, Args) ->
@@ -43,7 +46,7 @@ eqc_test_() ->
         {timeout, 120,
          ?_assertEqual(true, 
              eqc:quickcheck(
-                 ?QC_OUT(eqc:numtests(100, eqc:conjunction(
+                 ?QC_OUT(eqc:numtests(50, eqc:conjunction(
                              [{prop_quorum_min, 
                                      prop_quorum_min()},
                               {prop_config,
@@ -54,6 +57,7 @@ eqc_test_() ->
     }.
 
 setup() ->
+    file:make_dir(?logdir),
     application:start(lager),
     application:start(rafter).
 
@@ -80,19 +84,22 @@ prop_quorum_min() ->
         end).
 
 prop_config() ->
+    Opts = #rafter_opts{logdir = ?logdir},
     ?FORALL(Cmds, commands(?MODULE),
         aggregate(command_names(Cmds),
             begin
                 Running = [a, b, c, d, e],
-                [rafter:start_node(P, rafter_sm_echo) || P <- Running],
+                [rafter:start_node(P, Opts) || P <- Running],
                 {H, S, Res} = run_commands(?MODULE, Cmds),
-                %% The sleep is to prevent badarg in gen_fsm:send_event/2 from
-                %% rafter_requester replies after the servers shut down
-                timer:sleep(1),
-                [rafter:stop_node(P) || P <- S#state.running],
-                ?WHENFAIL(io:format("history is ~p~n Res = ~p~n State = ~p~n", 
-                          [H, Res, S]), equals(ok, Res))
+                eqc_statem:pretty_commands(?MODULE, Cmds, {H, S, Res},
+                    begin
+                        [rafter:stop_node(P) || P <- S#state.running],
+                        os:cmd(["rm ", ?logdir, "/*.meta"]),
+                        os:cmd(["rm ", ?logdir, "/*.log"]),
+                        Res =:= ok
+                    end)
             end)).
+
 
 %% ====================================================================
 %% eqc_statem callbacks
