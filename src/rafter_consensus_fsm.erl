@@ -90,7 +90,7 @@ handle_event(_Event, _StateName, State) ->
     {stop, {error, badmsg}, State}.
 
 handle_sync_event(get_state, _From, StateName, State) ->
-    {reply, {ok, State}, StateName, State, ?timeout()};
+    {reply, State, StateName, State, ?timeout()};
 handle_sync_event(get_leader, _From, StateName, State) ->
     {reply, State#state.leader, StateName, State, ?timeout()};
 handle_sync_event(_Event, _From, _StateName, State) ->
