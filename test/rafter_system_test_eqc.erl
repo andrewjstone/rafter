@@ -35,6 +35,8 @@
     eqc:on_output(fun(Str, Args) ->
                 io:format(user, Str, Args) end, P)).
 
+-define(OUTPUT_FILE, "./rafter_system_test_eqc.out").
+
 %% ====================================================================
 %% Tests
 %% ====================================================================
@@ -49,7 +51,7 @@ eqc_test_() ->
         {timeout, 120,
          ?_assertEqual(true, 
              eqc:quickcheck(
-                 ?QC_OUT(eqc:numtests(20, prop_rafter()))))}
+                 ?QC_OUT(eqc:numtests(30, prop_rafter()))))}
        ]
       }
      ]
@@ -96,10 +98,14 @@ command(#model_state{state=stable, to=To, running=Running}) ->
                {50, {call, rafter, get_state, [To]}},
                {1, {call, rafter, stop_node, [oneof(Running)]}}]).
 
-precondition(#model_state{running=[]}, {call, rafter, stop_node, _}) ->
+precondition(#model_state{state=init}, _) ->
+    true;
+precondition(#model_state{running=[]}, {call, rafter, _, _}) ->
     false;
-precondition(#model_state{}, _SymCall) ->
-    true.
+precondition(#model_state{running=Running, to=To}, {call, rafter, _, _}) ->
+    lists:member(To, Running).
+%%precondition(#model_state{}, _SymCall) ->
+ %%   true.
 
 next_state(#model_state{state=init}=S, _, 
     {call, rafter, start_nodes, [Running]}) ->
@@ -108,7 +114,8 @@ next_state(#model_state{state=init}=S, _,
 %% The initial config is always just the running servers
 next_state(#model_state{state=blank, to=To, running=Running}=S, _,
     {call, rafter, set_config, [To, Running]}) ->
-        S#model_state{state=stable, oldservers=Running, commit_index=1};
+        S#model_state{state=stable, oldservers=Running, commit_index=1, 
+                      leader=To};
 
 next_state(#model_state{state=stable, to=To, leader=undefined}=S, 
     {redirect, Leader}, {call, rafter, op, [To, _Command]}) ->
@@ -117,13 +124,13 @@ next_state(#model_state{state=stable, to=To, leader=undefined}=S,
 next_state(#model_state{state=stable}=S, {error, _}, {call, rafter, op, _}) ->
     S;
 
-next_state(#model_state{state=stable, leader=To, to=To, commit_index=CI}=S, 
-    {ok, _}, {call, rafter, op, _}) ->
-        S#model_state{commit_index=CI+1};
-
 next_state(#model_state{state=stable, leader=undefined, to=To, commit_index=CI}=S, 
     {ok, _}, {call, rafter, op, _}) ->
         S#model_state{leader=To, commit_index=CI+1};
+
+next_state(#model_state{state=stable, leader=To, to=To, commit_index=CI}=S, 
+    {ok, _}, {call, rafter, op, _}) ->
+        S#model_state{commit_index=CI+1};
 
 next_state(#model_state{state=stable, leader=undefined, to=To, leader_state=LeaderState}=S,
     {ok, NewLeaderState}, {call, rafter, get_state, []}) ->
@@ -133,15 +140,15 @@ next_state(#model_state{state=stable, leader=To, to=To, leader_state=LeaderState
     {ok, NewLeaderState}, {call, rafter, get_state, []}) ->
         S#model_state{prev_leader_state=LeaderState, leader_state=NewLeaderState};
 
-next_state(#model_state{state=stable, leader=L, running=Running}=S, ok, 
+next_state(#model_state{state=stable, to=To, running=Running}=S, ok, 
     {call, rafter, stop_node, [Node]}) -> 
-        case L of
+        NewRunning = lists:delete(Node, Running),
+        case To of
             Node ->
-                NewRunning = lists:delete(Node, Running),
                 S#model_state{leader=undefined, running=NewRunning, 
                               to=lists:nth(1, NewRunning)};
             _ ->
-                S#model_state{running=lists:delete(Node, Running)}
+                S#model_state{running=NewRunning}
         end;
 
 next_state(S, _, _) ->
