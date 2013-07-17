@@ -145,7 +145,7 @@ postcondition(_S, {call, rafter, set_config, [Peer, _NewServers]}, {error, {redi
     rafter:get_leader(Peer) =:= Leader;
 
 %% Config set successfully
-postcondition(_S, {call, rafter, set_config, _args}, {ok, _newconfig, _id}) ->
+postcondition(_S, {call, rafter, set_config, _args}, {ok, _newconfig}) ->
     true;
 
 postcondition(#state{running=Running, state=blank},
@@ -159,7 +159,7 @@ postcondition(#state{running=Running, oldservers=Old, newservers=New, state=Stat
     majority_not_running(Peer, Config, Running);
 
 postcondition(#state{running=Running, oldservers=Old, state=stable}, 
-             {call, rafter, set_config, [Peer, NewServers]}, {error, timeout, _}) ->
+             {call, rafter, set_config, [Peer, NewServers]}, {error, timeout}) ->
     %% This is the state that the server should have set from this call should
     %% have set before running the reconfig
     C=#config{state=transitional, oldservers=Old, newservers=NewServers},
