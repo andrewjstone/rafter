@@ -34,4 +34,3 @@
     
     %% We allow pluggable state machine modules.
     state_machine :: atom()}).
-

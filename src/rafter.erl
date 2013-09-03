@@ -2,17 +2,17 @@
 
 -include("rafter.hrl").
 -include("rafter_consensus_fsm.hrl").
+-include("rafter_opts.hrl").
 
 %% API
 -export([start_node/2, stop_node/1, op/2, set_config/2, 
-         get_state/1, get_leader/1]).
+         get_state/1, get_leader/1, get_entry/2, get_last_entry/1]).
 
 %% Test API
--export([start_cluster/0, start_test_node/1, start_nodes/1,
-         test_peers/1]).
+-export([start_cluster/0, start_test_node/1]).
 
-start_node(Peer, StateMachineModule) ->
-    rafter_sup:start_peer(Peer, StateMachineModule).
+start_node(Peer, Opts) ->
+    rafter_sup:start_peer(Peer, Opts).
 
 stop_node(Peer) ->
     rafter_sup:stop_peer(Peer).
@@ -36,32 +36,28 @@ get_state(Peer) ->
 get_leader(Peer) ->
     rafter_consensus_fsm:leader(Peer).
 
+-spec get_entry(peer(), non_neg_integer()) -> term().
+get_entry(Peer, Index) ->
+    rafter_log:get_entry(Peer, Index).
+
+-spec get_last_entry(peer()) -> term().
+get_last_entry(Peer) ->
+    rafter_log:get_last_entry(Peer).
+
 %% =============================================
 %% Test Functions
 %% =============================================
 
-start_nodes(Peers) ->
-    Status = [rafter_sup:start_peer(P, rafter_sm_echo) || P <- Peers],
-    Pids = [P || {ok, P} <- Status],
-    {ok, Pids}.
-
 start_cluster() ->
     application:start(lager),
     application:start(rafter),
-    start_cluster(rafter_sm_echo).
-
-start_cluster(StateMachine) ->
+    Opts = #rafter_opts{state_machine=rafter_sm_echo, logdir="./log"},
     Peers = [peer1, peer2, peer3, peer4, peer5],
-    [rafter_sup:start_peer(Me, StateMachine) || Me <- Peers].
+    [rafter_sup:start_peer(Me, Opts) || Me <- Peers].
 
 start_test_node(Name) ->
     application:start(lager),
     application:start(rafter),
     Me = {Name, node()},
-    start_node(Me, rafter_sm_echo).
-
-test_peers(Me) ->
-    [_Name, Domain] = string:tokens(atom_to_list(node()), "@"),
-    Peers = [{list_to_atom(Name), list_to_atom(Name ++ "@" ++ Domain)} || 
-        Name <- ["peer1", "peer2", "peer3", "peer4", "peer5"]],
-    lists:delete(Me, Peers).
+    Opts = #rafter_opts{state_machine=rafter_sm_echo, logdir="./"},
+    start_node(Me, Opts).
