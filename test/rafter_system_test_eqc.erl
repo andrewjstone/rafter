@@ -26,6 +26,7 @@
                       oldservers=[] :: list(atom()),
                       newservers=[] :: list(atom()),
                       commit_index=0 :: non_neg_integer(),
+                      last_committed_op :: term(),
                       leader :: atom()}).
 
 
@@ -141,10 +142,11 @@ next_state(#model_state{state=blank, to=To, running=Running}=S,
     _Result, {call, rafter, set_config, [To, Running]}) ->
         S#model_state{commit_index=1, state=stable, oldservers=Running};
 
-next_state(#model_state{state=stable, commit_index=CI, leader=Leader}=S, 
-  Result, {call, rafter, op, _}) ->
-      S#model_state{commit_index={call, ?MODULE, maybe_increment, [CI, Result]},
-                    leader={call, ?MODULE, get_leader, [Leader, Result]}};
+next_state(#model_state{state=stable, commit_index=CI, leader=Leader, 
+  last_committed_op=LastOp}=S, Result, {call, rafter, op, [_, Op]}) ->
+    S#model_state{commit_index={call, ?MODULE, maybe_increment, [CI, Result]},
+                  leader={call, ?MODULE, maybe_change_leader, [Leader, Result]},
+                  last_committed_op={call, ?MODULE, maybe_change_last_op, [LastOp, Op, Result]}};
 
 next_state(#model_state{state=stable, to=To, running=Running}=S, 
     _Result, {call, rafter, stop_node, [Node]}) -> 
@@ -181,7 +183,8 @@ postcondition(#model_state{state=stable},
 
 invariant(ModelState=#model_state{to=To, state=stable}) ->
     State = rafter:get_state(To), 
-    commit_indexes_monotonic(ModelState, State);
+    commit_indexes_monotonic(ModelState, State) andalso
+    committed_entry_exists_in_log(ModelState, To);
 invariant(_) ->
     true.
 
@@ -194,12 +197,17 @@ maybe_increment(CommitIndex, {ok, _}) ->
 maybe_increment(CommitIndex, {error, _}) ->
     CommitIndex.
 
-get_leader(Leader, {ok, _}) ->
+maybe_change_leader(Leader, {ok, _}) ->
     Leader;
-get_leader(_Leader, {error, {redirect, NewLeader}}) ->
+maybe_change_leader(_Leader, {error, {redirect, NewLeader}}) ->
     NewLeader;
-get_leader(_Leader, {error, _}) ->
+maybe_change_leader(_Leader, {error, _}) ->
     unknown.
+
+maybe_change_last_op(_, Op, {ok, _}) ->
+    Op;
+maybe_change_last_op(CurrentLastOp, _, {error, _}) ->
+    CurrentLastOp.
 
 %% ====================================================================
 %% Invariants 
@@ -207,6 +215,21 @@ get_leader(_Leader, {error, _}) ->
 
 commit_indexes_monotonic(#model_state{commit_index=CI}, State) ->
     State#state.commit_index =< CI.
+
+committed_entry_exists_in_log(#model_state{commit_index=0}, _) ->
+    true;
+committed_entry_exists_in_log(#model_state{leader=unknown}, _) ->
+    true;
+committed_entry_exists_in_log(#model_state{commit_index=CI, 
+                                           last_committed_op=Op}, To) ->
+   %% TODO: Make this search backwards for much greater efficiency
+   {ok, #rafter_entry{type=Type, index=CommitIndex, cmd=Cmd}} = rafter:get_entry(To, CI),
+   case Type of
+       config ->
+           true;
+       op ->
+           CommitIndex =:= CI andalso Cmd =:= Op
+   end.
 
 %% ====================================================================
 %% EQC Generators
