@@ -20,13 +20,13 @@ start_link() ->
 %% For testing, this allows us to start 5 nodes in one erlang VM and 
 %% communicate with local names.
 -spec start_peer(atom() | {atom(), atom()}, atom()) -> ok.
-start_peer(Me, StateMachineModule) when is_atom(Me) ->
+start_peer(Me, Opts) when is_atom(Me) ->
     SupName = consensus_sup(Me),
-    start_child(SupName, Me, StateMachineModule);
-start_peer(Me, StateMachineModule) ->
+    start_child(SupName, Me, Opts);
+start_peer(Me, Opts) ->
     {Name, _Node} = Me,
     SupName = consensus_sup(Name),
-    start_child(SupName, Me, StateMachineModule).
+    start_child(SupName, Me, Opts).
 
 -spec stop_peer(atom() | tuple()) -> ok.
 stop_peer(Peer) when is_atom(Peer) ->
@@ -50,9 +50,9 @@ init([]) ->
 consensus_sup(Peer) ->
     list_to_atom(atom_to_list(Peer) ++ "_consensus_sup").
 
-start_child(SupName, Me, StateMachineModule) ->
+start_child(SupName, Me, Opts) ->
     ConsensusSup= {SupName,
-        {rafter_consensus_sup, start_link, [Me, StateMachineModule]},
+        {rafter_consensus_sup, start_link, [Me, Opts]},
         permanent, 5000, supervisor, [rafter_consensus_sup]},
     supervisor:start_child(?MODULE, ConsensusSup).
 
