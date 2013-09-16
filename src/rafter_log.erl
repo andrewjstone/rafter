@@ -9,20 +9,20 @@
 
 %% API
 -export([start_link/2, stop/1, append/2, check_and_append/3, binary_to_entry/1,
-        entry_to_binary/1,get_last_entry/1, get_entry/2, get_term/2, 
-        get_last_index/1, get_last_term/1, get_config/1, set_metadata/3, 
+        entry_to_binary/1,get_last_entry/1, get_entry/2, get_term/2,
+        get_last_index/1, get_last_term/1, get_config/1, set_metadata/3,
         get_metadata/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3, format_status/2]).
 
-%%============================================================================= 
+%%=============================================================================
 %% Logfile Structure
-%%============================================================================= 
+%%=============================================================================
 %% @doc A log is made up of a file header and entries. The header contains file
-%%      metadata and is written once at file creation. Each entry is a binary 
-%%      of arbitrary size containing header information and is followed by a trailer. 
+%%      metadata and is written once at file creation. Each entry is a binary
+%%      of arbitrary size containing header information and is followed by a trailer.
 %%      The formats of the file header and entries are described below.
 %%
 %%         File Header Format
@@ -31,23 +31,23 @@
 %%
 %%         Entry Format
 %%         ----------------
-%%         <<Sha1:20/binary, Type:8, Term:64, Index: 64, DataSize:32, Data/binary>> 
-%%    
+%%         <<Sha1:20/binary, Type:8, Term:64, Index: 64, DataSize:32, Data/binary>>
+%%
 %%         Sha1 - hash of the rest of the entry,
-%%         Type - ?CONFIG | ?OP 
+%%         Type - ?CONFIG | ?OP
 %%         Term - The term of the entry
 %%         Index - The log index of the entry
 %%         DataSize - The size of Data in bytes
 %%         Data - Data encoded with term_to_binary/1
-%%    
-%%     After each log entry a trailer is written. The trailer is used for 
+%%
+%%     After each log entry a trailer is written. The trailer is used for
 %%     detecting incomplete/corrupted writes, pointing to the latest config and
 %%     traversing the log file backwards.
 %%
 %%         Trailer Format
 %%         ----------------
 %%         <<Crc:32, ConfigStart:64, EntryStart:64, ?MAGIC:64>>
-%%         
+%%
 %%         Crc - checksum, computed with erlang:crc32/1, of the rest of the trailer
 %%         ConfigStart - file location of last seen config,
 %%         EntryStart - file location of the start of this entry
@@ -78,6 +78,7 @@
 -define(LATEST_VERSION, 1).
 
 %% Entry Types
+-define(NOOP, 0).
 -define(CONFIG, 1).
 -define(OP, 2).
 -define(ALL, [?CONFIG, ?OP]).
@@ -85,6 +86,8 @@
 %%====================================================================
 %% API
 %%====================================================================
+entry_to_binary(#rafter_entry{type=noop, term=Term, index=Index, cmd=noop}) ->
+    entry_to_binary(?NOOP, Term, Index, noop);
 entry_to_binary(#rafter_entry{type=config, term=Term, index=Index, cmd=Data}) ->
     entry_to_binary(?CONFIG, Term, Index, Data);
 entry_to_binary(#rafter_entry{type=op, term=Term, index=Index, cmd=Data}) ->
@@ -97,12 +100,14 @@ entry_to_binary(Type, Term, Index, Data) ->
     <<Sha1/binary, B0/binary>>.
 
 binary_to_entry(<<Sha1:20/binary, Type:8, Term:64, Index:64, Size:32, Data/binary>>) ->
-    %% We want to crash on badmatch here if if our log is corrupt 
+    %% We want to crash on badmatch here if if our log is corrupt
     %% TODO: Allow an operator to repair the log by truncating at that point
     %% or repair each entry 1 by 1 by consulting a good log.
     Sha1 = crypto:hash(sha, <<Type:8, Term:64, Index:64, Size:32, Data/binary>>),
     binary_to_entry(Type, Term, Index, Data).
 
+binary_to_entry(?NOOP, Term, Index, _Data) ->
+    #rafter_entry{type=noop, term=Term, index=Index, cmd=noop};
 binary_to_entry(?CONFIG, Term, Index, Data) ->
     #rafter_entry{type=config, term=Term, index=Index, cmd=binary_to_term(Data)};
 binary_to_entry(?OP, Term, Index, Data) ->
@@ -114,8 +119,8 @@ start_link(Peer, Opts) ->
 stop(Peer) ->
     gen_server:cast(logname(Peer), stop).
 
-%% @doc check_and_append/3 gets called in the follower state only and will only 
-%% truncate the log if entries don't match. It never truncates and re-writes 
+%% @doc check_and_append/3 gets called in the follower state only and will only
+%% truncate the log if entries don't match. It never truncates and re-writes
 %% committed entries as this violates the safety of the RAFT protocol.
 check_and_append(Peer, Entries, Index) ->
     gen_server:call(logname(Peer), {check_and_append, Entries, Index}).
@@ -237,7 +242,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %%====================================================================
-%% Internal Functions 
+%% Internal Functions
 %%====================================================================
 
 maybe_append(_, _, [], State) ->
@@ -245,7 +250,7 @@ maybe_append(_, _, [], State) ->
 maybe_append(Index, eof, [Entry | Entries], State) ->
     NewState = write_entry(Entry, State),
     maybe_append(Index+1, eof, Entries, NewState);
-maybe_append(Index, Loc, [#rafter_entry{term=Term}=Entry | Entries], 
+maybe_append(Index, Loc, [#rafter_entry{term=Term}=Entry | Entries],
              State=#state{logfile=File}) ->
     case read_entry(File, Loc) of
         {entry, Data, NewLocation} ->
@@ -264,7 +269,7 @@ maybe_append(Index, Loc, [#rafter_entry{term=Term}=Entry | Entries],
             State2 = write_entry(Entry, State1),
             maybe_append(Index+1, eof, Entries, State2)
     end.
-         
+
 logname({Name, _Node}) ->
     list_to_atom(atom_to_list(Name) ++ "_log");
 logname(Me) ->
@@ -308,10 +313,10 @@ write_entry(#rafter_entry{type=Type, cmd=Cmd}=Entry, S=#state{write_location=Loc
                                                               index=Index,
                                                               logfile=File}) ->
     NewIndex = Index + 1,
-    NewEntry = Entry#rafter_entry{index=NewIndex}, 
+    NewEntry = Entry#rafter_entry{index=NewIndex},
     BinEntry = entry_to_binary(NewEntry),
-    {NewConfigLoc, NewConfig, Trailer} = 
-    case Type of 
+    {NewConfigLoc, NewConfig, Trailer} =
+    case Type of
         config ->
             {Loc, Cmd, make_trailer(Loc, Loc)};
         _ ->
@@ -330,7 +335,7 @@ read_config(File, Loc) ->
     #rafter_entry{type=config, cmd=Config} = binary_to_entry(Data),
     {ok, Config}.
 
-%% TODO: Write to a tmp file then rename so the write is always atomic and the 
+%% TODO: Write to a tmp file then rename so the write is always atomic and the
 %% metadata file cannot become partially written.
 write_metadata(Filename, Meta) ->
     ok = file:write_file(Filename, term_to_binary(Meta)).
@@ -342,7 +347,7 @@ read_metadata(Filename, FileSize) ->
         {error, enoent} when FileSize =< ?FILE_HEADER_SIZE ->
             {ok, #meta{}};
         {error, Reason} ->
-            io:format("Failed to open metadata file: ~p. Reason = ~p~n", 
+            io:format("Failed to open metadata file: ~p. Reason = ~p~n",
                 [Filename, Reason]),
             {ok, #meta{}}
     end.
@@ -364,7 +369,7 @@ repair_file(File, Size) ->
         {ok, ConfigStart, EntryStart, TruncateAt} ->
             maybe_truncate(File, TruncateAt, Size),
             {entry, Data, _} = read_entry(File, EntryStart),
-            #rafter_entry{term=Term, index=Index} = binary_to_entry(Data), 
+            #rafter_entry{term=Term, index=Index} = binary_to_entry(Data),
             {ok, ConfigStart, Term, Index, TruncateAt};
         not_found ->
             io:format("NOT FOUND: Size = ~p~n", [Size]),
@@ -463,7 +468,7 @@ find_entry(File, Loc, Index) ->
 find_last_entry(_File, WriteLocation) when WriteLocation =< ?FILE_HEADER_SIZE ->
     undefined;
 find_last_entry(File, WriteLocation) ->
-    {ok, <<_:32, _:64, EntryStart:64, _/binary>>} = 
+    {ok, <<_:32, _:64, EntryStart:64, _/binary>>} =
         file:pread(File, WriteLocation - ?TRAILER_SIZE, ?TRAILER_SIZE),
     {entry, Entry, _} = read_entry(File, EntryStart),
     binary_to_entry(Entry).
@@ -484,7 +489,7 @@ read_entry(File, Location) ->
 -spec read_data(file:io_device(), non_neg_integer(), binary()) ->
     {entry, binary(), non_neg_integer()} | eof.
 read_data(File, Location, <<Sha1:20/binary, Type:8, Term:64, Index:64, Size:32>>=H) ->
-    case file:pread(File, Location, Size) of 
+    case file:pread(File, Location, Size) of
         {ok, Data} ->
             %% Fail-fast Integrity check. TODO: Offer user repair options?
             Sha1 = crypto:hash(sha, <<Type:8, Term:64, Index:64, Size:32, Data/binary>>),
