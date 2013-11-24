@@ -48,7 +48,7 @@ eqc_test_() ->
        fun cleanup/1,
        [%% Run the quickcheck tests
         {timeout, 120,
-         ?_assertEqual(true, 
+         ?_assertEqual(true,
              eqc:quickcheck(
                  ?QC_OUT(eqc:numtests(50, prop_rafter()))))}
        ]
@@ -74,9 +74,9 @@ run_prop(Cmds) ->
 
 run_print_cleanup(Cmds) ->
     {H, S, Res} = run_commands(?MODULE, Cmds),
-    eqc_statem:pretty_commands(?MODULE, 
-        Cmds, 
-        {H, S, Res}, 
+    eqc_statem:pretty_commands(?MODULE,
+        Cmds,
+        {H, S, Res},
         cleanup_test(S, Res)).
 
 cleanup_test(S, Res) ->
@@ -132,29 +132,29 @@ precondition(#model_state{running=Running}, {call, rafter, op, [To, _]}) ->
 precondition(#model_state{running=Running}, {call, rafter, set_config, [To, _]}) ->
     lists:member(To, Running).
 
-next_state(#model_state{state=init}=S, _, 
+next_state(#model_state{state=init}=S, _,
     {call, ?MODULE, start_nodes, [Running]}) ->
         Leader = lists:nth(1, Running),
         S#model_state{state=blank, running=Running, to=Leader, leader=Leader};
 
 %% The initial config is always just the running servers
-next_state(#model_state{state=blank, to=To, running=Running}=S, 
+next_state(#model_state{state=blank, to=To, running=Running}=S,
     _Result, {call, rafter, set_config, [To, Running]}) ->
         S#model_state{commit_index=1, state=stable, oldservers=Running};
 
-next_state(#model_state{state=stable, commit_index=CI, leader=Leader, 
+next_state(#model_state{state=stable, commit_index=CI, leader=Leader,
   last_committed_op=LastOp}=S, Result, {call, rafter, op, [_, Op]}) ->
     S#model_state{commit_index={call, ?MODULE, maybe_increment, [CI, Result]},
                   leader={call, ?MODULE, maybe_change_leader, [Leader, Result]},
                   last_committed_op={call, ?MODULE, maybe_change_last_op, [LastOp, Op, Result]}};
 
-next_state(#model_state{state=stable, to=To, running=Running}=S, 
-    _Result, {call, rafter, stop_node, [Node]}) -> 
+next_state(#model_state{state=stable, to=To, running=Running}=S,
+    _Result, {call, rafter, stop_node, [Node]}) ->
         NewRunning = lists:delete(Node, Running),
         case To of
             Node ->
                 S#model_state{leader=unknown,
-                              running=NewRunning, 
+                              running=NewRunning,
                               to=lists:nth(1, NewRunning)};
             _ ->
                 S#model_state{running=NewRunning}
@@ -163,11 +163,11 @@ next_state(#model_state{state=stable, to=To, running=Running}=S,
 
 postcondition(#model_state{state=init}, {call, ?MODULE, start_nodes, _}, _) ->
     true;
-postcondition(#model_state{state=blank}, 
+postcondition(#model_state{state=blank},
   {call, rafter, set_config, [_To, _Servers]}, {ok, _}) ->
     true;
 
-postcondition(#model_state{state=stable, oldservers=Servers, to=To}, 
+postcondition(#model_state{state=stable, oldservers=Servers, to=To},
   {call, rafter, op, [To, _]}, {ok, _}) ->
     true =:= lists:member(To, Servers);
 postcondition(#model_state{state=stable, to=To}, {call, rafter, op, [To, _]},
@@ -177,12 +177,12 @@ postcondition(#model_state{state=stable, to=To}, {call, rafter, op, [To, _]},
     {error, election_in_progress}) ->
         true;
 
-postcondition(#model_state{state=stable}, 
+postcondition(#model_state{state=stable},
     {call, rafter, stop_node, [_Node]}, ok) ->
         true.
 
 invariant(ModelState=#model_state{to=To, state=stable}) ->
-    State = rafter:get_state(To), 
+    {_, State} = sys:get_state(To),
     commit_indexes_monotonic(ModelState, State) andalso
     committed_entry_exists_in_log(ModelState, To);
 invariant(_) ->
@@ -210,7 +210,7 @@ maybe_change_last_op(CurrentLastOp, _, {error, _}) ->
     CurrentLastOp.
 
 %% ====================================================================
-%% Invariants 
+%% Invariants
 %% ====================================================================
 
 commit_indexes_monotonic(#model_state{commit_index=CI}, State) ->
@@ -220,7 +220,7 @@ committed_entry_exists_in_log(#model_state{commit_index=0}, _) ->
     true;
 committed_entry_exists_in_log(#model_state{leader=unknown}, _) ->
     true;
-committed_entry_exists_in_log(#model_state{commit_index=CI, 
+committed_entry_exists_in_log(#model_state{commit_index=CI,
                                            last_committed_op=Op}, To) ->
    %% TODO: Make this search backwards for much greater efficiency
    {ok, #rafter_entry{type=Type, index=CommitIndex, cmd=Cmd}} = rafter:get_entry(To, CI),
@@ -236,7 +236,7 @@ committed_entry_exists_in_log(#model_state{commit_index=CI,
 %% ====================================================================
 
 %% Commands for a hypothetical backend. Tested with rafter_sm_echo backend.
-%% This module is here to test consensus, not the operational capabilities 
+%% This module is here to test consensus, not the operational capabilities
 %% of the backend.
 command() ->
     oneof(["inc key val", "get key", "set key val", "keyspace", "config"]).

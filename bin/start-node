@@ -1,0 +1,1 @@
+erl -pa deps/*/ebin ebin -setcookie rafter_localhost_test -name $1@127.0.0.1 -eval "rafter:start_test_node($1)."
