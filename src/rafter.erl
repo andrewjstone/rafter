@@ -31,11 +31,6 @@ set_config(Peer, NewServers) ->
     Id = druuid:v4(),
     rafter_consensus_fsm:set_config(Peer, {Id, NewServers}).
 
-%% @doc Retrieve the system state of the corresponding fsm
--spec get_state(peer()) -> #state{}.
-get_state(Peer) ->
-    rafter_consensus_fsm:get_state(Peer).
-
 -spec get_leader(peer()) -> peer() | undefined.
 get_leader(Peer) ->
     rafter_consensus_fsm:leader(Peer).
