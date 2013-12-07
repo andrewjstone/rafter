@@ -10,8 +10,8 @@
 init(Peer) ->
     State = #state{peer=Peer},
     NewState = stop(State),
-    ets:new(rafter_backend_ets, [set, named_table, public]),
-    ets:new(rafter_backend_ets_tables, [set, named_table, public]),
+    _Tid = ets:new(rafter_backend_ets, [set, named_table, public]),
+    _Tid = ets:new(rafter_backend_ets_tables, [set, named_table, public]),
     NewState.
 
 stop(State) ->
@@ -46,7 +46,7 @@ read({list_keys, Table}, State) ->
 
 write({new, Name}, State) ->
     Val = try
-              ets:new((Name), [ordered_set, named_table, public]),
+              _Tid = ets:new((Name), [ordered_set, named_table, public]),
               ets:insert(rafter_backend_ets_tables, {Name}),
               {ok, Name}
           catch _:E ->

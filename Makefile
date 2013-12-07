@@ -1,7 +1,9 @@
-.PHONY: test
+.PHONY: test deps
 
 rafter:
 	./rebar compile
+deps:
+	./rebar get-deps
 test:
 	./rebar eunit skip_deps=true
 

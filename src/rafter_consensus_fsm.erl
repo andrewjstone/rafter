@@ -12,7 +12,7 @@
 -define(HEARTBEAT_TIMEOUT, 25).
 
 %% API
--export([start/0, stop/1, start/1, start_link/3, read_op/2, op/2,
+-export([start_link/3, stop/1, get_leader/1, read_op/2, op/2,
          set_config/2, send/2, send_sync/2]).
 
 %% gen_fsm callbacks
@@ -25,19 +25,11 @@
 %% Testing outputs
 -export([set_term/2, candidate_log_up_to_date/4]).
 
-%% This function is simply for testing a single peer with erlang transport
-start() ->
-    start(peer1).
-
 stop(Pid) ->
     gen_fsm:send_all_state_event(Pid, stop).
 
-start(Me) ->
-    gen_fsm:start({local, Me}, ?MODULE, [Me], []).
-
 start_link(NameAtom, Me, Opts) ->
     gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, Opts], []).
-    %%gen_fsm:start_link({local, NameAtom}, ?MODULE, [Me, Opts], [{debug, [trace]}]).
 
 op(Peer, Command) ->
     gen_fsm:sync_send_event(Peer, {op, Command}).
@@ -48,13 +40,16 @@ read_op(Peer, Command) ->
 set_config(Peer, Config) ->
     gen_fsm:sync_send_event(Peer, {set_config, Config}).
 
+get_leader(Pid) ->
+    gen_fsm:sync_send_all_state_event(Pid, get_leader).
+
 -spec send(atom(), #vote{} | #append_entries_rpy{}) -> ok.
 send(To, Msg) ->
     %% Catch badarg error thrown if name is unregistered
     catch gen_fsm:send_event(To, Msg).
 
 -spec send_sync(atom(), #request_vote{} | #append_entries{}) ->
-    {ok, #vote{}} | {ok, #append_entries_rpy{}}.
+    #vote{} | #append_entries_rpy{} | timeout.
 send_sync(To, Msg) ->
     Timeout=100,
     gen_fsm:sync_send_event(To, Msg, Timeout).
@@ -64,7 +59,6 @@ send_sync(To, Msg) ->
 %%=============================================================================
 
 init([Me, #rafter_opts{state_machine=StateMachine}]) ->
-    random:seed(),
     Timer = gen_fsm:send_event_after(election_timeout(), timeout),
     #meta{voted_for=VotedFor, term=Term} = rafter_log:get_metadata(Me),
     BackendState = StateMachine:init(Me),
@@ -95,6 +89,8 @@ handle_event(stop, _, State) ->
 handle_event(_Event, _StateName, State) ->
     {stop, {error, badmsg}, State}.
 
+handle_sync_event(get_leader, _, StateName, State=#state{leader=Leader}) ->
+    {reply, Leader, StateName, State};
 handle_sync_event(_Event, _From, _StateName, State) ->
     {stop, badmsg, State}.
 
@@ -174,7 +170,7 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
     State3 = reset_timer(election_timeout(), State2),
     case consistency_check(AppendEntries, State3) of
         false ->
-            lager:info("~p ~p ~n", [AppendEntries, State3]),
+            ok = lager:info("~p ~p ~n", [AppendEntries, State3]),
             {reply, Rpy, follower, State3};
         true ->
             {ok, CurrentIndex} = rafter_log:check_and_append(Me,
@@ -811,7 +807,7 @@ send_entry(Peer, Index, #state{me=Me,
 
 send_append_entries(#state{followers=Followers, send_clock=SendClock}=State) ->
     NewState = State#state{send_clock=SendClock+1},
-    [send_entry(Peer, Index, NewState) ||
+    _ = [send_entry(Peer, Index, NewState) ||
         {Peer, Index} <- dict:to_list(Followers)],
     NewState.
 
@@ -843,7 +839,7 @@ become_candidate(#state{term=CurrentTerm, me=Me}=State0) ->
                          responses=dict:new(),
                          leader=undefined},
     State3 = set_metadata(Me, State2),
-    request_votes(State3),
+    _ = request_votes(State3),
     State3.
 
 become_leader(#state{me=Me, term=Term, init_config=InitConfig}=State) ->

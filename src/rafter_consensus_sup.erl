@@ -8,7 +8,6 @@
 %% Supervisor callbacks
 -export([init/1]).
 
--spec start_link(atom() | {atom(), atom()}, atom()) -> ok.
 start_link(Me, Opts) when is_atom(Me) ->
     SupName = name(Me, "sup"),
     start_link(Me, SupName, Me, Opts);
@@ -29,7 +28,7 @@ init([NameAtom, Me, Opts]) ->
     {ok, {{one_for_all, 5, 10}, [LogServer, ConsensusFsm]}}.
 
 %% ===================================================================
-%% Private Functions 
+%% Private Functions
 %% ===================================================================
 name(Name, Extension) ->
     list_to_atom(atom_to_list(Name) ++ "_" ++ Extension).

@@ -1,9 +1,7 @@
 -module(rafter_backend).
 
--export([behaviour_info/1]).
-
-behaviour_info(callbacks) ->
-    [{init, 1}, {read, 2}, {write, 2}];
-behaviour_info(_) ->
-    undefined.
-
+-callback init(Args :: term()) -> State :: term().
+-callback read(Operation :: term(), State :: term()) ->
+    {Value :: term(), State :: term()}.
+-callback write(Operation :: term(), State :: term()) ->
+    {Value :: term(), State :: term()}.

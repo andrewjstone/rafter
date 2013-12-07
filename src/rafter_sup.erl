@@ -2,6 +2,8 @@
 
 -behaviour(supervisor).
 
+-include("rafter_opts.hrl").
+
 %% API
 -export([start_link/0, start_peer/2, stop_peer/1]).
 
@@ -15,11 +17,12 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-%% @doc Start an individual peer. In production, this will only be called once 
-%% on each machine with node/local name semantics. 
-%% For testing, this allows us to start 5 nodes in one erlang VM and 
+%% @doc Start an individual peer. In production, this will only be called once
+%% on each machine with node/local name semantics.
+%% For testing, this allows us to start 5 nodes in one erlang VM and
 %% communicate with local names.
--spec start_peer(atom() | {atom(), atom()}, atom()) -> ok.
+-spec start_peer(atom() | {atom(), atom()}, #rafter_opts{}) ->
+    {'error',_} | {'ok','undefined' | pid()} | {'ok','undefined' | pid(),_}.
 start_peer(Me, Opts) when is_atom(Me) ->
     SupName = consensus_sup(Me),
     start_child(SupName, Me, Opts);
@@ -45,7 +48,7 @@ init([]) ->
     {ok, { {one_for_one, 5, 10}, []} }.
 
 %% ===================================================================
-%% Private Functions 
+%% Private Functions
 %% ===================================================================
 consensus_sup(Peer) ->
     list_to_atom(atom_to_list(Peer) ++ "_consensus_sup").
@@ -57,7 +60,7 @@ start_child(SupName, Me, Opts) ->
     supervisor:start_child(?MODULE, ConsensusSup).
 
 stop_child(ChildId) ->
-    supervisor:terminate_child(?MODULE, ChildId),
+    ok = supervisor:terminate_child(?MODULE, ChildId),
     %% A big meh to OTP supervisor child handling. Just delete so start works
     %% again.
     supervisor:delete_child(?MODULE, ChildId).
