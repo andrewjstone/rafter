@@ -14,8 +14,8 @@ send(To, #append_entries{from=From}=Msg) ->
 send(To, From, Msg) ->
     spawn(fun() ->
               case rafter_consensus_fsm:send_sync(To, Msg) of
-                  Rpy when is_record(Rpy, vote) orelse 
-                           is_record(Rpy, append_entries_rpy) -> 
+                  Rpy when is_record(Rpy, vote) orelse
+                           is_record(Rpy, append_entries_rpy) ->
                       rafter_consensus_fsm:send(From, Rpy);
                   E ->
                       lager:error("Error sending ~p to To ~p: ~p", [Msg, To, E])

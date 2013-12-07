@@ -10,15 +10,15 @@
 %% API
 %%====================================================================
 
--spec quorum_min(term(), #config{}, dict()) -> non_neg_integer().
+-spec quorum_min(term(), #config{} | [], dict()) -> non_neg_integer().
 quorum_min(_Me, #config{state=blank}, _) ->
     0;
 quorum_min(Me, #config{state=stable, oldservers=OldServers}, Responses) ->
     quorum_min(Me, OldServers, Responses);
 quorum_min(Me, #config{state=staging, oldservers=OldServers}, Responses) ->
     quorum_min(Me, OldServers, Responses);
-quorum_min(Me, #config{state=transitional, 
-                   oldservers=Old, 
+quorum_min(Me, #config{state=transitional,
+                   oldservers=Old,
                    newservers=New}, Responses) ->
     min(quorum_min(Me, Old, Responses), quorum_min(Me, New, Responses));
 
@@ -51,13 +51,13 @@ quorum(Me, #config{state=transitional, oldservers=Old, newservers=New}, Response
 %% this case.
 quorum(Me, Servers, Responses) ->
     TrueResponses = [R || {Peer, R} <- dict:to_list(Responses), R =:= true,
-                                        lists:member(Peer, Servers)], 
+                                        lists:member(Peer, Servers)],
     case lists:member(Me, Servers) of
         true ->
             length(TrueResponses) + 1 > length(Servers)/2;
         false ->
             %% We are about to commit a new configuration that doesn't contain
-            %% the local leader. We must therefore have responses from a 
+            %% the local leader. We must therefore have responses from a
             %% majority of the other servers to have a quorum.
             length(TrueResponses) > length(Servers)/2
     end.
@@ -101,17 +101,17 @@ reconfig(#config{state=stable}=Config, Servers) ->
 -spec allow_config(#config{}, list()) -> boolean().
 allow_config(#config{state=blank}, _NewServers) ->
     true;
-allow_config(#config{state=stable, oldservers=OldServers}, NewServers) 
+allow_config(#config{state=stable, oldservers=OldServers}, NewServers)
     when NewServers =/= OldServers ->
     true;
-allow_config(#config{oldservers=OldServers}, NewServers) 
-    when NewServers =:= OldServers -> 
+allow_config(#config{oldservers=OldServers}, NewServers)
+    when NewServers =:= OldServers ->
     {error, not_modified};
 allow_config(_Config, _NewServers) ->
     {error, config_in_progress}.
 
 %%====================================================================
-%% Internal Functions 
+%% Internal Functions
 %%====================================================================
 
 -spec index(atom() | {atom(), atom()}, dict()) -> non_neg_integer().

@@ -13,10 +13,10 @@
     term = 0 :: non_neg_integer(),
     voted_for :: term(),
     commit_index = 0 :: non_neg_integer(),
-    init_config :: undefined | list() | complete,
+    init_config :: undefined | list() | complete | no_client,
 
     %% Used for Election and Heartbeat timeouts
-    timer :: timer:tref(),
+    timer :: reference(),
 
     %% leader state: contains nextIndex for each peer
     followers = dict:new() :: dict(),

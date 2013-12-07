@@ -1,7 +1,9 @@
-.PHONY: test
+.PHONY: test deps
 
 rafter:
 	./rebar compile
+deps:
+	./rebar get-deps
 test:
 	./rebar eunit skip_deps=true
 
@@ -23,7 +25,7 @@ dialyzer:
 	@sleep 1
 	dialyzer -Wno_return -Wunmatched_returns -Wrace_conditions \
 		--plt $(PLT) deps/*/ebin ebin | \
-	    tee .dialyzer.raw-output | egrep -v -f ./dialyzer.ignore-warnings
+	    tee .dialyzer.raw-output
 
 cleanplt:
 	@echo

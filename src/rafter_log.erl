@@ -258,13 +258,13 @@ maybe_append(Index, Loc, [#rafter_entry{term=Term}=Entry | Entries],
                 #rafter_entry{index=Index, term=Term} ->
                     maybe_append(Index+1, NewLocation, Entries, State);
                 #rafter_entry{index=Index, term=_} ->
-                    truncate(File, Loc),
+                    ok = truncate(File, Loc),
                     State1 = State#state{write_location=Loc},
                     State2 = write_entry(Entry, State1),
                     maybe_append(Index + 1, eof, Entries, State2)
             end;
         eof ->
-            truncate(File, Loc),
+            ok = truncate(File, Loc),
             State1 = State#state{write_location=Loc},
             State2 = write_entry(Entry, State1),
             maybe_append(Index+1, eof, Entries, State2)
@@ -353,7 +353,7 @@ read_metadata(Filename, FileSize) ->
     end.
 
 truncate(File, Pos) ->
-    file:position(File, Pos),
+    {ok, _} = file:position(File, Pos),
     file:truncate(File).
 
 maybe_truncate(File, TruncateAt, FileSize) ->
@@ -373,7 +373,7 @@ repair_file(File, Size) ->
             {ok, ConfigStart, Term, Index, TruncateAt};
         not_found ->
             io:format("NOT FOUND: Size = ~p~n", [Size]),
-            truncate(File, 0),
+            ok = truncate(File, 0),
             empty_file
     end.
 
