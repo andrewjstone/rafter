@@ -130,7 +130,7 @@ You should see something similar to the following, which is the state of
 Set the config for the cluster. Note that because we are talking to a
 process, `peer1`, registered locally on the node `peer1@127.0.0.1`, we
 don't need to use the fully qualified name when talking to it via the shell on
-node1.
+peer1.
 
 ```erlang
     Peers = [{peer1, 'peer1@127.0.0.1'}, 
