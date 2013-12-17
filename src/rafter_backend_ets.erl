@@ -10,8 +10,8 @@
 init(Peer) ->
     State = #state{peer=Peer},
     NewState = stop(State),
-    _Tid = ets:new(rafter_backend_ets, [set, named_table, public]),
-    _Tid = ets:new(rafter_backend_ets_tables, [set, named_table, public]),
+    _Tid1 = ets:new(rafter_backend_ets, [set, named_table, public]),
+    _Tid2 = ets:new(rafter_backend_ets_tables, [set, named_table, public]),
     NewState.
 
 stop(State) ->
