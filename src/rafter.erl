@@ -48,8 +48,7 @@ get_last_entry(Peer) ->
 %% =============================================
 
 start_cluster() ->
-    ok = application:start(lager),
-    ok = application:start(rafter),
+    {ok, _Started} = application:ensure_all_started(rafter),
     Opts = #rafter_opts{state_machine=rafter_backend_echo, logdir="./log"},
     Peers = [peer1, peer2, peer3, peer4, peer5],
     [rafter_sup:start_peer(Me, Opts) || Me <- Peers].

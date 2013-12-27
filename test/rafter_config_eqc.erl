@@ -44,10 +44,10 @@ eqc_test_() ->
        fun cleanup/1,
        [%% Run the quickcheck tests
         {timeout, 120,
-         ?_assertEqual(true, 
+         ?_assertEqual(true,
              eqc:quickcheck(
                  ?QC_OUT(eqc:numtests(50, eqc:conjunction(
-                             [{prop_quorum_min, 
+                             [{prop_quorum_min,
                                      prop_quorum_min()},
                               {prop_config,
                                   prop_config()}])))))}
@@ -58,8 +58,7 @@ eqc_test_() ->
 
 setup() ->
     file:make_dir(?logdir),
-    application:start(lager),
-    application:start(rafter).
+    {ok, _Started} = application:ensure_all_started(rafter).
 
 cleanup(_) ->
     application:stop(rafter),
@@ -118,7 +117,7 @@ command(#state{to=To}) ->
 precondition(#state{running=Running}, {call, rafter, set_config, [Peer, _]}) ->
     lists:member(Peer, Running).
 
-next_state(#state{state=blank}=S, 
+next_state(#state{state=blank}=S,
            _Result, {call, rafter, set_config, [To, Peers]}) ->
     case lists:member(To, Peers) of
         true ->
@@ -160,33 +159,33 @@ postcondition(#state{running=Running, state=blank},
     Config=#config{state=stable, oldservers=NewServers},
     majority_not_running(Peer, Config, Running);
 
-postcondition(#state{running=Running, oldservers=Old, newservers=New, state=State}, 
+postcondition(#state{running=Running, oldservers=Old, newservers=New, state=State},
         {call, rafter, set_config, [Peer, _]}, {error, election_in_progress}) ->
     Config=#config{state=State, oldservers=Old, newservers=New},
     majority_not_running(Peer, Config, Running);
 
-postcondition(#state{running=Running, oldservers=Old, state=stable}, 
+postcondition(#state{running=Running, oldservers=Old, state=stable},
              {call, rafter, set_config, [Peer, NewServers]}, {error, timeout}) ->
     %% This is the state that the server should have set from this call should
     %% have set before running the reconfig
     C=#config{state=transitional, oldservers=Old, newservers=NewServers},
     majority_not_running(Peer, C, Running);
 
-postcondition(#state{oldservers=Old, newservers=New, state=State}, 
+postcondition(#state{oldservers=Old, newservers=New, state=State},
              {call, rafter, set_config, [Peer, _]}, {error, not_consensus_group_member}) ->
     C=#config{state=State, oldservers=Old, newservers=New},
     false =:= rafter_config:has_vote(Peer, C);
-        
-postcondition(#state{state=State}, {call, rafter, set_config, [_, _]}, 
+
+postcondition(#state{state=State}, {call, rafter, set_config, [_, _]},
               {error, config_in_progress}) ->
     State =:= transitional;
 
-postcondition(#state{running=Running, state=blank}, 
+postcondition(#state{running=Running, state=blank},
         {call, rafter, set_config, [Peer, _]}, {error, invalid_initial_config}) ->
     C = #config{state=blank},
     majority_not_running(Peer, C, Running);
 
-postcondition(#state{oldservers=Old}, 
+postcondition(#state{oldservers=Old},
               {call, rafter, set_config, [_Peer, NewServers]}, {error, not_modified}) ->
     Old =:= NewServers.
 
@@ -209,7 +208,7 @@ map_to_true(QuorumMin, Values) ->
 majority_not_running(Peer, Config, Running) ->
     Dict = quorum_dict(Peer, Running),
     not rafter_config:quorum(Peer, Config, Dict).
-  
+
 %% ====================================================================
 %% EQC Generators
 %% ====================================================================
@@ -219,7 +218,7 @@ responses() ->
     {Me, list(response(Me))}.
 
 response(Me) ->
-    ?SUCHTHAT({Server, _Index}, 
+    ?SUCHTHAT({Server, _Index},
               {server(), rafter_gen:non_neg_integer()},
               Me =/= Server).
 
@@ -243,16 +242,16 @@ seven_servers() ->
     vector(7, server()).
 
 config() ->
-    oneof([stable_config(), blank_config(), 
+    oneof([stable_config(), blank_config(),
            staging_config(), transitional_config()]).
 
 stable_config() ->
-    #config{state=stable, 
+    #config{state=stable,
             oldservers=servers(),
             newservers=[]}.
 
 blank_config() ->
-    #config{state=blank, 
+    #config{state=blank,
             oldservers=[],
             newservers=[]}.
 
