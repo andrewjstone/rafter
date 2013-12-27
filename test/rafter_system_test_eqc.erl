@@ -62,8 +62,7 @@ eqc_test_() ->
 setup() ->
     os:cmd(["rm -rf ", ?logdir]),
     os:cmd(["mkdir ", ?logdir]),
-    application:start(lager),
-    application:start(rafter).
+    {ok, _Started} = application:ensure_all_started(rafter).
 
 cleanup(_) ->
     application:stop(rafter),
