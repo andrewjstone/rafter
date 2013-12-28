@@ -31,18 +31,18 @@ read({get, Table, Key}, State) ->
               {error, E}
           end,
      {Val, State};
-
 read(list_tables, State) ->
     {{ok, [Table || {Table} <- ets:tab2list(rafter_backend_ets_tables)]},
         State};
-
 read({list_keys, Table}, State) ->
     Val = try
               list_keys(Table)
           catch _:E ->
               {error, E}
           end,
-    {Val, State}.
+    {Val, State};
+read(_, State) ->
+    {{error, ets_read_badarg}, State}.
 
 write({new, Name}, State) ->
     Val = try
@@ -53,7 +53,6 @@ write({new, Name}, State) ->
               {error, E}
           end,
     {Val, State};
-
 write({put, Table, Key, Value}, State) ->
     Val = try
               ets:insert(Table, {Key, Value}),
@@ -62,7 +61,6 @@ write({put, Table, Key, Value}, State) ->
               {error, E}
           end,
     {Val, State};
-
 write({delete, Table}, State) ->
     Val =
         try
@@ -73,15 +71,15 @@ write({delete, Table}, State) ->
             {error, E}
         end,
     {Val, State};
-
-
 write({delete, Table, Key}, State) ->
     Val = try
               {ok, ets:delete(Table, Key)}
           catch _:E ->
               {error, E}
           end,
-    {Val, State}.
+    {Val, State};
+write(_, State) ->
+    {{error, ets_write_badarg}, State}.
 
 list_keys(Table) ->
     list_keys(ets:first(Table), Table, []).
