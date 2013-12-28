@@ -658,7 +658,7 @@ maybe_send_client_reply(_, _, State, _) ->
 maybe_send_read_replies(#state{me=Me,
                              config=Config,
                              send_clock_responses=Responses}=State0) ->
-    Clock = rafter_config:quorum_min(Me, Config, Responses),
+    Clock = rafter_config:quorum_max(Me, Config, Responses),
     {ok, Requests, State} = find_eligible_read_requests(Clock, State0),
     NewState = send_client_read_replies(Requests, State),
     NewState.
@@ -697,7 +697,7 @@ maybe_commit(#state{me=Me,
                     commit_index=CommitIndex,
                     config=Config,
                     responses=Responses}=State) ->
-    Min = rafter_config:quorum_min(Me, Config, Responses),
+    Min = rafter_config:quorum_max(Me, Config, Responses),
     case Min > CommitIndex andalso safe_to_commit(Min, State) of
         true ->
             NewState = commit_entries(Min, State),
