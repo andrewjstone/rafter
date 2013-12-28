@@ -47,8 +47,8 @@ eqc_test_() ->
          ?_assertEqual(true,
              eqc:quickcheck(
                  ?QC_OUT(eqc:numtests(50, eqc:conjunction(
-                             [{prop_quorum_min,
-                                     prop_quorum_min()},
+                             [{prop_quorum_max,
+                                     prop_quorum_max()},
                               {prop_config,
                                   prop_config()}])))))}
        ]
@@ -68,11 +68,11 @@ cleanup(_) ->
 %% EQC Properties
 %% ====================================================================
 
-prop_quorum_min() ->
+prop_quorum_max() ->
     ?FORALL({Config, {Me, Responses}}, {config(), responses()},
         begin
             ResponsesDict = dict:from_list(Responses),
-            case rafter_config:quorum_min(Me, Config, ResponsesDict) of
+            case rafter_config:quorum_max(Me, Config, ResponsesDict) of
                 0 ->
                     true;
                 QuorumMin ->
