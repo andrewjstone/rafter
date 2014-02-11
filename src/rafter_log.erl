@@ -57,6 +57,8 @@
 %%                  <<"\xFE\xED\xFE\xED\xFE\xED\xFE\xED">>
 %%
 
+-define(MAX_HINTS, 100).
+
 -record(state, {
     logfile :: file:io_device(),
     version :: non_neg_integer(),
@@ -67,7 +69,12 @@
     meta :: #meta{},
     last_entry :: #rafter_entry{},
     index = 0 :: non_neg_integer(),
-    term = 0 :: non_neg_integer()}).
+    term = 0 :: non_neg_integer(),
+    hints = dict:new() :: dict(),
+    hint_hits = 0 :: non_neg_integer(),
+    hint_misses = 0 :: non_neg_integer(),
+    hint_prunes = 0 :: non_neg_integer(),
+    seq_distances = dict:new()}).
 
 -define(MAGIC, <<"\xFE\xED\xFE\xED\xFE\xED\xFE\xED">>).
 -define(MAGIC_SIZE, 8).
@@ -221,9 +228,45 @@ handle_call({set_metadata, VotedFor, Term}, _, #state{meta_filename=Name}=S) ->
     {reply, ok, S#state{meta=Meta}};
 
 %% This always starts searching from the head of the log. Todo: Be smarter.
-handle_call({get_entry, Index}, _From, #state{logfile=File}=State) ->
-    Res = find_entry(File, ?FILE_HEADER_SIZE, Index),
-    {reply, {ok, Res}, State}.
+handle_call({get_entry, Index}, _From, #state{logfile=File,
+                                              hints=Hints,
+                                              hint_hits=Hits0,
+                                              hint_misses=Misses0,
+                                              hint_prunes=Prunes0}=State) ->
+    case dict:find(Index, Hints) of
+        error -> 
+            Hits = Hits0,
+            Misses = Misses0 + 1,
+            Loc = ?FILE_HEADER_SIZE; %% start from the beginning of file
+        {ok, Loc0} -> 
+            Hits = Hits0 + 1,
+            Misses = Misses0,
+            Loc = Loc0
+    end,
+
+    {Res, NewState} = 
+    case find_entry(File, Loc, Index) of
+        not_found -> 
+            {not_found, State};
+        {Entry, NextLoc} ->
+            NewHints = 
+            case dict:size(Hints) =:= ?MAX_HINTS of
+                true ->
+                    Prunes = Prunes0+1,
+                    L = lists:nthtail(round(?MAX_HINTS/10),
+                                      dict:to_list(Hints)),
+                    Dict = dict:from_list(L),
+                    dict:store(Index, NextLoc, Dict);
+                false ->
+                    Prunes = Prunes0,
+                    dict:store(Index, NextLoc, Hints)
+            end,
+            {Entry, State#state{hints=NewHints,
+                                hint_hits=Hits,
+                                hint_misses=Misses,
+                                hint_prunes=Prunes}}
+    end,
+    {reply, {ok, Res}, NewState}.
 
 handle_cast(stop, #state{logfile=File}=State) ->
     ok = file:close(File),
@@ -454,16 +497,20 @@ find_entry(File, Loc, Index) ->
         {ok, <<_Sha1:20/binary, _Type:8, _Term:64, Index:64, _DataSize:32>>=Header} ->
             case read_data(File, Loc + ?HEADER_SIZE, Header) of
                 {entry, Entry, _} ->
-                    binary_to_entry(Entry);
+                    {binary_to_entry(Entry), Loc};
                 eof ->
                     %% This should only occur if the entry is currently being written.
                     not_found
             end;
         {ok, <<_:37/binary, DataSize:32>>} ->
-            find_entry(File, Loc + ?HEADER_SIZE + DataSize + ?TRAILER_SIZE, Index);
+            NextLoc = next_entry_loc(Loc, DataSize),
+            find_entry(File, NextLoc, Index);
         eof ->
             not_found
     end.
+
+next_entry_loc(Loc, DataSize) ->
+    Loc + ?HEADER_SIZE + DataSize + ?TRAILER_SIZE.
 
 find_last_entry(_File, WriteLocation) when WriteLocation =< ?FILE_HEADER_SIZE ->
     undefined;
