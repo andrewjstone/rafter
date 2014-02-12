@@ -57,17 +57,27 @@
 %%                  <<"\xFE\xED\xFE\xED\xFE\xED\xFE\xED">>
 %%
 
+-define(MAX_HINTS, 1000).
+
+-type index() :: non_neg_integer().
+-type offset() :: non_neg_integer().
+
 -record(state, {
     logfile :: file:io_device(),
     version :: non_neg_integer(),
     meta_filename :: string(),
     write_location = 0 :: non_neg_integer(),
     config :: #config{},
-    config_loc :: non_neg_integer(),
+    config_loc :: offset(),
     meta :: #meta{},
     last_entry :: #rafter_entry{},
-    index = 0 :: non_neg_integer(),
-    term = 0 :: non_neg_integer()}).
+    index = 0 :: index(),
+    term = 0 :: non_neg_integer(),
+    hints :: ets:tid(),
+    hint_prunes = 0 :: non_neg_integer(),
+
+    %% frequency of number of entries scanned in get_entry/2 calls
+    seek_counts = dict:new()}).
 
 -define(MAGIC, <<"\xFE\xED\xFE\xED\xFE\xED\xFE\xED">>).
 -define(MAGIC_SIZE, 8).
@@ -82,6 +92,13 @@
 -define(CONFIG, 1).
 -define(OP, 2).
 -define(ALL, [?CONFIG, ?OP]).
+
+-ifdef(TEST).
+-define(ETS_OPTS, [ordered_set, protected]).
+-else.
+-define(ETS_OPTS, [named_table, ordered_set, protected]).
+-endif.
+
 
 %%====================================================================
 %% API
@@ -167,7 +184,6 @@ get_term(Peer, Index) ->
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
-
 init([Name, #rafter_opts{logdir = Logdir}]) ->
     LogName = Logdir++"/rafter_"++atom_to_list(Name)++".log",
     MetaName = Logdir++"/rafter_"++atom_to_list(Name)++".meta",
@@ -185,16 +201,12 @@ init([Name, #rafter_opts{logdir = Logdir}]) ->
                 meta=Meta,
                 config=Config,
                 config_loc = ConfigLoc,
-                last_entry=LastEntry}}.
+                last_entry=LastEntry,
+                hints=ets:new(rafter_hints, ?ETS_OPTS)}}.
 
 format_status(_, [_, State]) ->
     Data = lager:pr(State, ?MODULE),
     [{data, [{"StateData", Data}]}].
-
-handle_call({check_and_append, Entries, Index}, _From, #state{logfile=File}=S) ->
-    Loc = get_pos(File, Index),
-    #state{index=NewIndex}=NewState = maybe_append(Index, Loc, Entries, S),
-    {reply, {ok, NewIndex}, NewState};
 
 handle_call({append, Entries}, _From, #state{logfile=File}=State) ->
     NewState = write_entries(File, Entries, State),
@@ -220,10 +232,69 @@ handle_call({set_metadata, VotedFor, Term}, _, #state{meta_filename=Name}=S) ->
     ok = write_metadata(Name, Meta),
     {reply, ok, S#state{meta=Meta}};
 
-%% This always starts searching from the head of the log. Todo: Be smarter.
-handle_call({get_entry, Index}, _From, #state{logfile=File}=State) ->
-    Res = find_entry(File, ?FILE_HEADER_SIZE, Index),
-    {reply, {ok, Res}, State}.
+handle_call({check_and_append, Entries, Index}, _From, #state{logfile=File,
+                                                              hints=Hints}=S) ->
+    Loc0 = closest_forward_offset(Hints, Index),
+    {Loc, Count} = get_pos(File, Loc0, Index),
+    State = update_counters(Count, 0, S),
+    #state{index=NewIndex}=NewState = maybe_append(Index, Loc, Entries, State),
+    {reply, {ok, NewIndex}, NewState};
+
+handle_call({get_entry, Index}, _From, #state{logfile=File,
+                                              hints=Hints}=State0) ->
+    Loc = closest_forward_offset(Hints, Index),
+    {Res, NewState} = 
+    case find_entry(File, Loc, Index) of
+        {not_found, Count} -> 
+            State = update_counters(Count, 0, State0),
+            {not_found, State};
+        {Entry, NextLoc, Count} ->
+            Prunes = add_hint(Hints, Index, NextLoc),
+            State = update_counters(Count, Prunes, State0),
+            {Entry, State}
+    end,
+    {reply, {ok, Res}, NewState}.
+
+-spec update_counters(offset(), non_neg_integer(), #state{}) -> #state{}.
+update_counters(Distance, Prunes, #state{hint_prunes=Prunes0,
+                                                   seek_counts=Dict0}
+                                                   =State) ->
+    Dict = dict:update_counter(Distance, 1, Dict0),
+    State#state{hint_prunes=Prunes0 + Prunes, seek_counts=Dict}.
+
+-spec closest_forward_offset(ets:tid(), index()) -> offset().
+closest_forward_offset(Hints, Index) ->
+    case ets:prev(Hints, Index) of
+        '$end_of_table' -> 
+            ?FILE_HEADER_SIZE;
+        Key -> 
+            [{Key, Loc0}] = ets:lookup(Hints, Key),
+            Loc0
+    end.
+
+-spec add_hint(ets:tid(), index(), offset()) -> non_neg_integer().
+add_hint(Hints, Index, Loc) ->
+    {size, Size} = lists:keyfind(size, 1, ets:info(Hints)),
+    case Size >= ?MAX_HINTS of
+        true ->
+            delete_hints(Hints),
+            true = ets:insert(Hints, {Index, Loc}),
+            1;
+        false ->
+            true = ets:insert(Hints, {Index, Loc}),
+            0
+    end.
+
+%% Delete every 10th hint
+delete_hints(Hints) ->
+    L = ets:tab2list(Hints),
+    {_, ToDelete} =  
+    lists:foldl(fun({Index, _}, {Count, Deleted}) when Count rem 10 =:= 0 ->
+                       {Count+1, [Index | Deleted]};
+                   ({_, _}, {Count, Deleted}) ->
+                       {Count+1, Deleted}
+                end, {0, []}, L),
+    [true = ets:delete(Hints, Index) || Index <- ToDelete].
 
 handle_cast(stop, #state{logfile=File}=State) ->
     ok = file:close(File),
@@ -435,35 +506,42 @@ find_last_magic_number_in_block(Block) ->
             {ok, Index - 1}
     end.
 
-get_pos(File, Index) ->
-    get_pos(File, ?FILE_HEADER_SIZE, Index).
-
 get_pos(File, Loc, Index) ->
+    get_pos(File, Loc, Index, 0).
+
+get_pos(File, Loc, Index, Count) ->
     case file:pread(File, Loc, ?HEADER_SIZE) of
         {ok, <<_Sha1:20/binary, _Type:8, _Term:64, Index:64, _DataSize:32>>} ->
-            Loc;
+            {Loc, Count};
         {ok, <<_:37/binary, DataSize:32>>} ->
-            get_pos(File, Loc + ?HEADER_SIZE + DataSize + ?TRAILER_SIZE, Index);
+            get_pos(File, next_entry_loc(Loc, DataSize), Index, Count+1);
         eof ->
-            eof
+            {eof, Count}
     end.
 
 %% @doc Find an entry at the given index in a file. Search forward from Loc.
 find_entry(File, Loc, Index) ->
+    find_entry(File, Loc, Index, 0).
+
+find_entry(File, Loc, Index, Count) ->
     case file:pread(File, Loc, ?HEADER_SIZE) of
         {ok, <<_Sha1:20/binary, _Type:8, _Term:64, Index:64, _DataSize:32>>=Header} ->
             case read_data(File, Loc + ?HEADER_SIZE, Header) of
                 {entry, Entry, _} ->
-                    binary_to_entry(Entry);
+                    {binary_to_entry(Entry), Loc, Count};
                 eof ->
                     %% This should only occur if the entry is currently being written.
-                    not_found
+                    {not_found, Count}
             end;
         {ok, <<_:37/binary, DataSize:32>>} ->
-            find_entry(File, Loc + ?HEADER_SIZE + DataSize + ?TRAILER_SIZE, Index);
+            NextLoc = next_entry_loc(Loc, DataSize),
+            find_entry(File, NextLoc, Index, Count+1);
         eof ->
-            not_found
+            {not_found, Count}
     end.
+
+next_entry_loc(Loc, DataSize) ->
+    Loc + ?HEADER_SIZE + DataSize + ?TRAILER_SIZE.
 
 find_last_entry(_File, WriteLocation) when WriteLocation =< ?FILE_HEADER_SIZE ->
     undefined;

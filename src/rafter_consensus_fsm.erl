@@ -170,7 +170,6 @@ follower(#append_entries{term=Term, from=From, prev_log_index=PrevLogIndex,
     State3 = reset_timer(election_timeout(), State2),
     case consistency_check(AppendEntries, State3) of
         false ->
-            ok = lager:info("~p ~p ~n", [AppendEntries, State3]),
             {reply, Rpy, follower, State3};
         true ->
             {ok, CurrentIndex} = rafter_log:check_and_append(Me,
