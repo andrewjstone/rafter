@@ -93,6 +93,12 @@
 -define(OP, 2).
 -define(ALL, [?CONFIG, ?OP]).
 
+-ifdef(TEST).
+-define(ETS_OPTS, [ordered_set, protected]).
+-else.
+-define(ETS_OPTS, [named_table, ordered_set, protected]).
+-endif.
+
 
 %%====================================================================
 %% API
@@ -178,7 +184,6 @@ get_term(Peer, Index) ->
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
-
 init([Name, #rafter_opts{logdir = Logdir}]) ->
     LogName = Logdir++"/rafter_"++atom_to_list(Name)++".log",
     MetaName = Logdir++"/rafter_"++atom_to_list(Name)++".meta",
@@ -197,8 +202,7 @@ init([Name, #rafter_opts{logdir = Logdir}]) ->
                 config=Config,
                 config_loc = ConfigLoc,
                 last_entry=LastEntry,
-                hints=ets:new(rafter_hints, [named_table, ordered_set,
-                        protected])}}.
+                hints=ets:new(rafter_hints, ?ETS_OPTS)}}.
 
 format_status(_, [_, State]) ->
     Data = lager:pr(State, ?MODULE),
