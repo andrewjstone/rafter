@@ -192,6 +192,7 @@ init([Name, #rafter_opts{logdir = Logdir}]) ->
     {ok, Meta} = read_metadata(MetaName, Size),
     {ConfigLoc, Config, Term, Index, WriteLocation, Version} = init_file(LogFile, Size),
     LastEntry = find_last_entry(LogFile, WriteLocation),
+    HintsTable = list_to_atom("rafter_hints_" ++ atom_to_list(Name)),
     {ok, #state{logfile=LogFile,
                 version=Version,
                 meta_filename=MetaName,
@@ -202,7 +203,7 @@ init([Name, #rafter_opts{logdir = Logdir}]) ->
                 config=Config,
                 config_loc = ConfigLoc,
                 last_entry=LastEntry,
-                hints=ets:new(rafter_hints, ?ETS_OPTS)}}.
+                hints=ets:new(HintsTable, ?ETS_OPTS)}}.
 
 format_status(_, [_, State]) ->
     Data = lager:pr(State, ?MODULE),
