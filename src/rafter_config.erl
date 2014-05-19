@@ -10,7 +10,7 @@
 %% API
 %%====================================================================
 
--spec quorum_max(peer(), #config{} | [], dict()) -> non_neg_integer().
+-spec quorum_max(peer(), #config{} | [], dict:dict()) -> non_neg_integer().
 quorum_max(_Me, #config{state=blank}, _) ->
     0;
 quorum_max(Me, #config{state=stable, oldservers=OldServers}, Responses) ->
@@ -34,7 +34,7 @@ quorum_max(Me, Servers, Responses) ->
     Values = sorted_values(Me, Servers, Responses),
     lists:nth(length(Values) div 2 + 1, Values).
 
--spec quorum(peer(), #config{} | list(), dict()) -> boolean().
+-spec quorum(peer(), #config{} | list(), dict:dict()) -> boolean().
 quorum(_Me, #config{state=blank}, _Responses) ->
     false;
 quorum(Me, #config{state=stable, oldservers=OldServers}, Responses) ->
@@ -112,7 +112,7 @@ allow_config(_Config, _NewServers) ->
 %% Internal Functions
 %%====================================================================
 
--spec sorted_values(peer(), [peer()], dict()) -> [non_neg_integer()].
+-spec sorted_values(peer(), [peer()], dict:dict()) -> [non_neg_integer()].
 sorted_values(Me, Servers, Responses) ->
     Vals = lists:sort(lists:map(fun(S) -> value(S, Responses) end, Servers)),
     case lists:member(Me, Servers) of
@@ -125,7 +125,7 @@ sorted_values(Me, Servers, Responses) ->
             Vals
     end.
 
--spec value(peer(), dict()) -> non_neg_integer().
+-spec value(peer(), dict:dict()) -> non_neg_integer().
 value(Peer, Responses) ->
     case dict:find(Peer, Responses) of
         {ok, Value} ->

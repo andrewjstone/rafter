@@ -472,7 +472,7 @@ no_leader_error(Me, Config) ->
             election_in_progress
     end.
 
--spec reconfig(term(), dict(), #config{}, list(), #state{}) -> {dict(), #config{}}.
+-spec reconfig(term(), dict:dict(), #config{}, list(), #state{}) -> {dict:dict(), #config{}}.
 reconfig(Me, OldFollowers, Config0, NewServers, State) ->
     Config = rafter_config:reconfig(Config0, NewServers),
     NewFollowers = rafter_config:followers(Me, Config),
@@ -484,13 +484,13 @@ reconfig(Me, OldFollowers, Config0, NewServers, State) ->
     Followers = remove_followers(RemovedServers, Followers0),
     {Followers, Config}.
 
--spec add_followers(list(), dict(), #state{}) -> dict().
+-spec add_followers(list(), dict:dict(), #state{}) -> dict:dict().
 add_followers(NewServers, Followers, #state{me=Me}) ->
     NextIndex = rafter_log:get_last_index(Me) + 1,
     NewFollowers = [{S, NextIndex} || S <- NewServers],
     dict:from_list(NewFollowers ++ dict:to_list(Followers)).
 
--spec remove_followers(list(), dict()) -> dict().
+-spec remove_followers(list(), dict:dict()) -> dict:dict().
 remove_followers(Servers, Followers0) ->
     lists:foldl(fun(S, Followers) ->
                     dict:erase(S, Followers)
