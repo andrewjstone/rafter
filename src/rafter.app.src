@@ -4,6 +4,7 @@
   {vsn, "1"},
   {registered, []},
   {applications, [
+                  druuid,
                   lager,
                   kernel,
                   stdlib
