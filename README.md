@@ -1,4 +1,4 @@
-## <WARNING>
+## WARNING
 Rafter is not production ready. It hasn't been tested or run in any production environments.
 Furthermore, the log is entirely my own creation. It's possible that it isn't as safe or efficient
 as many other log structured backends like leveldb or rocksdb. The protocol is solid and
