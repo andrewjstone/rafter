@@ -1,3 +1,11 @@
+## <WARNING>
+Rafter is not production ready. It hasn't been tested or run in any production environments.
+Furthermore, the log is entirely my own creation. It's possible that it isn't as safe or efficient
+as many other log structured backends like leveldb or rocksdb. The protocol is solid and
+well tested, and it works as expected in most cases. However, support is not fully guaranteed as I
+don't have a current use case for rafter and am not actively developing it. I will however do my
+best to respond to reports and fix bugs in an efficient manner.
+
 ### Introduction
 Rafter is more than just an erlang implementation of the [raft consensus
 protocol](https://ramcloud.stanford.edu/wiki/download/attachments/11370504/raft.pdf).
@@ -13,7 +21,7 @@ local setup and ```{Name, Node}``` tuples when using distributed erlang.
 Configuration is dynamic and reconfiguration can be achieved without taking the
 system down.
 
-#### Distributed consensus with a replicated log 
+#### Distributed consensus with a replicated log
 For use cases such as implementing distributed databases, a replicated log can
 be used internally to provide strong consistency. Operations are serialized and
 written to log files in the same order on each node. Once the operation is
@@ -76,10 +84,10 @@ the following:
 
     cd rafter
     bin/start-node peerX
-    
+
 The above starts up an erlang VM with appropriate cookie and code path, and
 starts a rafter peer utilizing the ``rafter_ets_backend``. The node name, in
-this case PeerX (X=1|2|3), should be unique for each node. 
+this case PeerX (X=1|2|3), should be unique for each node.
 
 These three nodes can now be operated on by the rafter client API. They all have
 empty logs at this point and no configuration. Note that all operations on
@@ -92,7 +100,7 @@ they start out blank and the first entry in any log must be a configuration
 entry which you set at initial cluster start time. Note that the operation will
 fail with a timeout if a majority of nodes are not reachable. However, once
 those peers become reachable, the command will be replicated and the cluster
-will be configured. 
+will be configured.
 
 Go to the first erlang shell, where peer1 is running. We're just arbitrarily
 choosing a node to be the first leader here. Ensure it is running with
@@ -133,8 +141,8 @@ don't need to use the fully qualified name when talking to it via the shell on
 peer1.
 
 ```erlang
-    Peers = [{peer1, 'peer1@127.0.0.1'}, 
-             {peer2, 'peer2@127.0.0.1'}, 
+    Peers = [{peer1, 'peer1@127.0.0.1'},
+             {peer2, 'peer2@127.0.0.1'},
              {peer3, 'peer3@127.0.0.1'}],
     rafter:set_config(peer1, Peers).
 ```
@@ -148,7 +156,7 @@ ets backend is in use. It is anticipated that this API will grow to include
 multi-key and potentially global transactions.
 
 ```erlang
-   %% Create a new ets table 
+   %% Create a new ets table
    rafter:op(peer1, {new, sometable}).
 
    %% Store an erlang term in that table
@@ -178,7 +186,7 @@ backend. The ets backend provides the following read operations.
 ```
 
 ### Show the current state of the log for a peer
-    
+
     rr(rafter_log),
     sys:get_state(peer1_log).
 
@@ -196,11 +204,11 @@ Tests require [erlang quickcheck](http://quviq-licencer.com/trial.html) currentl
    * start with snapshotting assuming data is ```small``` as described in
     section 2 [here](https://ramcloud.stanford.edu/wiki/download/attachments/12386595/compaction.pdf?version=1&modificationDate=1367123151531)
  * Client interface
-   * Client Sequence number for idempotent counters? 
+   * Client Sequence number for idempotent counters?
    * Redis like text-based interface ?
    * HTTP ?
  * parallel eqc tests
- * Anti-Entropy 
+ * Anti-Entropy
    * Write AAE info into snapshot file during snapshotting
 
 ### License
