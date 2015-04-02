@@ -244,9 +244,9 @@ handle_call({check_and_append, Entries, Index}, _From, #state{logfile=File,
 handle_call({get_entry, Index}, _From, #state{logfile=File,
                                               hints=Hints}=State0) ->
     Loc = closest_forward_offset(Hints, Index),
-    {Res, NewState} = 
+    {Res, NewState} =
     case find_entry(File, Loc, Index) of
-        {not_found, Count} -> 
+        {not_found, Count} ->
             State = update_counters(Count, 0, State0),
             {not_found, State};
         {Entry, NextLoc, Count} ->
@@ -266,9 +266,9 @@ update_counters(Distance, Prunes, #state{hint_prunes=Prunes0,
 -spec closest_forward_offset(ets:tid(), index()) -> offset().
 closest_forward_offset(Hints, Index) ->
     case ets:prev(Hints, Index) of
-        '$end_of_table' -> 
+        '$end_of_table' ->
             ?FILE_HEADER_SIZE;
-        Key -> 
+        Key ->
             [{Key, Loc0}] = ets:lookup(Hints, Key),
             Loc0
     end.
@@ -289,7 +289,7 @@ add_hint(Hints, Index, Loc) ->
 %% Delete every 10th hint
 delete_hints(Hints) ->
     L = ets:tab2list(Hints),
-    {_, ToDelete} =  
+    {_, ToDelete} =
     lists:foldl(fun({Index, _}, {Count, Deleted}) when Count rem 10 =:= 0 ->
                        {Count+1, [Index | Deleted]};
                    ({_, _}, {Count, Deleted}) ->
@@ -331,7 +331,7 @@ maybe_append(Index, Loc, [#rafter_entry{term=Term}=Entry | Entries],
                     maybe_append(Index+1, NewLocation, Entries, State);
                 #rafter_entry{index=Index, term=_} ->
                     ok = truncate(File, Loc),
-                    State1 = State#state{write_location=Loc},
+                    State1 = State#state{write_location=Loc, index=Index-1},
                     State2 = write_entry(Entry, State1),
                     maybe_append(Index + 1, eof, Entries, State2)
             end;
