@@ -1,4 +1,4 @@
-.PHONY: test deps
+.PHONY: test ct-test deps
 
 rafter:
 	./rebar compile
@@ -7,17 +7,20 @@ deps:
 test:
 	./rebar eunit skip_deps=true
 
+ct-test:
+	./rebar ct skip_deps=true
+
 APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
 	xmerl webtool eunit syntax_tools compiler
 PLT = $(HOME)/.rafter_dialyzer_plt
 
-check_plt: 
+check_plt:
 	dialyzer --check_plt --plt $(PLT) --apps $(APPS)
 
-build_plt: 
+build_plt:
 	dialyzer --build_plt --output_plt $(PLT) --apps $(APPS)
 
-dialyzer: 
+dialyzer:
 	@echo
 	@echo Use "'make check_plt'" to check PLT prior to using this target.
 	@echo Use "'make build_plt'" to build PLT prior to using this target.

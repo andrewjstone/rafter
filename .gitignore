@@ -1,8 +1,8 @@
 deps
 log
+logs
 ebin
 .eunit
 *.beam
 *.swp
 erl_crash.dump
-
