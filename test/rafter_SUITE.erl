@@ -1,8 +1,8 @@
 -module(rafter_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
--include_lib("rafter/include/rafter_opts.hrl").
--include_lib("rafter/include/rafter.hrl").
+-include("rafter_opts.hrl").
+-include("rafter.hrl").
 
 -export([all/0, suite/0, init_per_suite/1, end_per_suite/1]).
 -export([t_overwrite_bug/1]).
