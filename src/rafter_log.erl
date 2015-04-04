@@ -331,8 +331,8 @@ maybe_append(Index, Loc, [#rafter_entry{term=Term}=Entry | Entries],
                     maybe_append(Index+1, NewLocation, Entries, State);
                 #rafter_entry{index=Index, term=_} ->
                     ok = truncate(File, Loc),
-                    State1 = State#state{write_location=Loc, index=Index-1},
-                    State2 = write_entry(Entry, State1),
+                    State1 = State#state{write_location=Loc},
+                    State2 = write_entry(Index, Entry, State1),
                     maybe_append(Index + 1, eof, Entries, State2)
             end;
         eof ->
@@ -379,13 +379,15 @@ write_entries(File, Entries, State) ->
     ok = file:sync(File),
     NewState.
 
-write_entry(#rafter_entry{type=Type, cmd=Cmd}=Entry, S=#state{write_location=Loc,
-                                                              config=Config,
-                                                              config_loc=ConfigLoc,
-                                                              index=Index,
-                                                              logfile=File}) ->
-    NewIndex = Index + 1,
-    NewEntry = Entry#rafter_entry{index=NewIndex},
+write_entry(Entry, State=#state{index=Index}) ->
+    write_entry(Index+1, Entry, State).
+
+write_entry(Index, #rafter_entry{type=Type, cmd=Cmd}=Entry,
+            S=#state{write_location=Loc,
+                     config=Config,
+                     config_loc=ConfigLoc,
+                     logfile=File}) ->
+    NewEntry = Entry#rafter_entry{index=Index},
     BinEntry = entry_to_binary(NewEntry),
     {NewConfigLoc, NewConfig, Trailer} =
     case Type of
@@ -396,7 +398,7 @@ write_entry(#rafter_entry{type=Type, cmd=Cmd}=Entry, S=#state{write_location=Loc
     end,
     ok = file:write(File, <<BinEntry/binary, Trailer/binary>>),
     NewLoc = Loc + byte_size(BinEntry) + ?TRAILER_SIZE,
-    S#state{index=NewIndex,
+    S#state{index=Index,
             config=NewConfig,
             write_location=NewLoc,
             config_loc=NewConfigLoc,
