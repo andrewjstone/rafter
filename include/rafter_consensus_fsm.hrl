@@ -8,6 +8,10 @@
     %% only used during read_only commands
     cmd :: term()}).
 
+-ifdef(otp17orNewer).
+-type dict() :: dict:dict().
+-endif.
+
 -record(state, {
     leader :: term(),
     term = 0 :: non_neg_integer(),

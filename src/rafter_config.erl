@@ -6,6 +6,10 @@
 -export([quorum/3, quorum_max/3, voters/1, voters/2, followers/2,
          reconfig/2, allow_config/2, has_vote/2]).
 
+-ifdef(otp17orNewer).
+-type dict() :: dict:dict().
+-endif.
+
 %%====================================================================
 %% API
 %%====================================================================
