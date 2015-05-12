@@ -823,14 +823,13 @@ become_candidate(#state{term=CurrentTerm, me=Me}=State0) ->
     _ = request_votes(State3),
     State3.
 
-become_leader(#state{me=Me, term=Term, config=Config, init_config=InitConfig, timer=Timer}=State) ->
+become_leader(#state{me=Me, term=Term, config=Config, init_config=InitConfig}=State) ->
     NewState0 = State#state{leader=Me,
                            responses=dict:new(),
                            followers=initialize_followers(State),
                            send_clock = 0,
                            send_clock_responses = dict:new(),
-                           read_reqs = orddict:new(),
-                           timer = Timer},
+                           read_reqs = orddict:new()},
 
     case InitConfig of
         complete ->
