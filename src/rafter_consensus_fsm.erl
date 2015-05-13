@@ -339,24 +339,6 @@ candidate({read_op, _}, _, #state{leader=undefined}=State) ->
 candidate({op, _Command}, _From, #state{leader=undefined}=State) ->
     {reply, {error, election_in_progress}, candidate, State}.
 
-leader(timeout, #state{term=Term,
-                       init_config=no_client,
-                       config=C}=S) ->
-    Entry = #rafter_entry{type=config, term=Term, cmd=C},
-    State0 = append(Entry, S),
-    State = reset_timer(heartbeat_timeout(), State0),
-    NewState = State#state{init_config=complete},
-    {next_state, leader, NewState};
-
-%% We have just been elected leader because of an initial configuration.
-%% Append the initial config and set init_config=complete.
-leader(timeout, #state{term=Term, init_config=[Id, From], config=C}=S) ->
-    State0 = reset_timer(heartbeat_timeout(), S),
-    Entry = #rafter_entry{type=config, term=Term, cmd=C},
-    State = append(Id, From, Entry, State0, leader),
-    NewState = State#state{init_config=complete},
-    {next_state, leader, NewState};
-
 leader(timeout, State0) ->
     State = reset_timer(heartbeat_timeout(), State0),
     NewState = send_append_entries(State),
@@ -841,8 +823,8 @@ become_candidate(#state{term=CurrentTerm, me=Me}=State0) ->
     _ = request_votes(State3),
     State3.
 
-become_leader(#state{me=Me, term=Term, init_config=InitConfig}=State) ->
-    NewState = State#state{leader=Me,
+become_leader(#state{me=Me, term=Term, config=Config, init_config=InitConfig}=State) ->
+    NewState0 = State#state{leader=Me,
                            responses=dict:new(),
                            followers=initialize_followers(State),
                            send_clock = 0,
@@ -853,12 +835,25 @@ become_leader(#state{me=Me, term=Term, init_config=InitConfig}=State) ->
         complete ->
             %% Commit a noop entry to the log so we can move the commit index
             Entry = #rafter_entry{type=noop, term=Term, cmd=noop},
-            append(Entry, NewState);
-        _ ->
-            %% First entry must always be a config entry
-            NewState
+            append(Entry, NewState0);
+        undefined ->
+            %% Same as above, but we received our config from another node
+            Entry = #rafter_entry{type=noop, term=Term, cmd=noop},
+            NewState1 = append(Entry, NewState0),
+            NewState1#state{init_config=complete};
+        [Id, From] ->
+            %% Initial config, append it, and set init_config=complete
+            Entry = #rafter_entry{type=config, term=Term, cmd=Config},
+            NewState1 = append(Id, From, Entry, NewState0, leader),
+            NewState2 = reset_timer(heartbeat_timeout(), NewState1),
+            NewState2#state{init_config=complete};
+        no_client ->
+            %% Same as above, but no-one to tell
+            Entry = #rafter_entry{type=config, term=Term, cmd=Config},
+            NewState1 = append(Entry, NewState0),
+            NewState2 = reset_timer(heartbeat_timeout(), NewState1),
+            NewState2#state{init_config=complete}
     end.
-
 
 initialize_followers(#state{me=Me, config=Config}) ->
     Peers = rafter_config:followers(Me, Config),
